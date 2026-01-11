@@ -1,0 +1,32 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data (optional - uncomment if you don't want to commit data files)
+# data/
+# cleaned_data/
+# chunks/
+# vector_db/
+
+# OS
+.DS_Store
+Thumbs.db
