@@ -35,7 +35,7 @@ def test_api_connection():
         
         # Test API call
         response = client.chat.completions.create(
-            model="meta-llama/llama-3.1-8b-instruct:free",
+            model="meta-llama/llama-3.2-3b-instruct:free",
             messages=[
                 {"role": "user", "content": "Say 'API connection successful!' if you can read this."}
             ]
