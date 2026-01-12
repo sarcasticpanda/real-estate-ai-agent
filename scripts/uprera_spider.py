@@ -61,13 +61,12 @@ class UPReraSpider(scrapy.Spider):
         viewstate_generator = response.css('input#__VIEWSTATEGENERATOR::attr(value)').get()
         event_validation = response.css('input#__EVENTVALIDATION::attr(value)').get()
         
-        # TODO: Update these field names by inspecting the actual website
+        # Form field names from UP-RERA website inspection (Jan 2026)
         formdata = {
             '__VIEWSTATE': viewstate or '',
             '__VIEWSTATEGENERATOR': viewstate_generator or '',
             '__EVENTVALIDATION': event_validation or '',
-            # REPLACE THESE with actual form field names from UP-RERA
-            'ctl00$ContentPlaceHolder1$ddlDistrict': 'Lucknow',
+            'ctl00$ContentPlaceHolder1$DdlprojectDistrict': 'Lucknow',
             'ctl00$ContentPlaceHolder1$btnSearch': 'Search'
         }
         
@@ -81,37 +80,78 @@ class UPReraSpider(scrapy.Spider):
     def parse_results_page(self, response):
         """
         Parse the search results page and extract project links
-        
-        NOTE: You MUST update these CSS selectors by inspecting the results table
-        
-        To inspect:
-        1. Submit a search on UP-RERA website
-        2. Right-click on results table > Inspect
-        3. Note the table class, row class, and cell structure
-        4. Update selectors below
         """
         self.logger.info("Parsing search results")
         
-        # TODO: Update these selectors based on actual HTML structure
-        project_rows = response.css('table.GridViewStyle tr[class*="RowStyle"]')
+        # Debug: Save response HTML
+        with open('debug_results.html', 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        self.logger.info("Saved response to debug_results.html")
         
-        for row in project_rows:
-            # TODO: Adjust column indices based on actual table structure
-            project_link = row.css('a::attr(href)').get()
-            project_name = row.css('td:nth-child(2)::text').get()
-            registration_no = row.css('td:nth-child(3)::text').get()
-            location = row.css('td:nth-child(4)::text').get()
+        # Try multiple possible table selectors
+        table_selectors = [
+            'table#ctl00_ContentPlaceHolder1_GridView1 tr',
+            'table[id*="GridView"] tr',
+            'table.table-bordered tr',
+            'table tr'
+        ]
+        
+        project_rows = []
+        for selector in table_selectors:
+            project_rows = response.css(selector)
+            if project_rows:
+                self.logger.info(f"Found {len(project_rows)} rows using selector: {selector}")
+                break
+        
+        if not project_rows:
+            self.logger.warning("No table rows found with any selector")
+            return
+        
+        for idx, row in enumerate(project_rows):
+            # Skip header row (has <th> elements or Orange background)
+            if row.css('th'):
+                self.logger.info(f"Row {idx}: Skipping header row")
+                continue
+            if 'Orange' in (row.css('::attr(style)').get() or ''):
+                self.logger.info(f"Row {idx}: Skipping Orange header row")
+                continue
             
-            if project_link:
+            # Extract data from columns
+            cells = row.css('td')
+            self.logger.info(f"Row {idx}: Found {len(cells)} cells")
+            
+            if len(cells) < 8:
+                self.logger.warning(f"Row {idx}: Not enough cells, skipping")
+                continue
+            
+            # Column structure: S.No(1), Reg.Number(2), Project Name(3), Promoter(4), District(5), ProjectType(6), Approval(7), ViewDetails(8)
+            registration_no = cells[1].css('::text').get()
+            project_name = cells[2].css('::text').get()
+            promoter_name = cells[3].css('::text').get()
+            district = cells[4].css('::text').get()
+            project_type = cells[5].css('::text').get()
+            
+            self.logger.info(f"Row {idx}: Project='{project_name}', Reg='{registration_no}'")
+            
+            # Get "View Details" link from column 8 (index 7)
+            detail_link = cells[7].css('a::attr(href)').get()
+            
+            if detail_link:
+                self.logger.info(f"Row {idx}: Following detail link {detail_link}")
                 yield response.follow(
-                    project_link,
+                    detail_link,
                     callback=self.parse_project_detail,
+                    errback=self.handle_error,
                     meta={
                         'project_name': project_name,
                         'registration_no': registration_no,
-                        'location': location
+                        'promoter_name': promoter_name,
+                        'district': district,
+                        'project_type': project_type
                     }
                 )
+            else:
+                self.logger.warning(f"Row {idx}: No detail link found")
         
         # Handle pagination
         next_page = response.css('a[title="Next Page"]::attr(href)').get()
@@ -120,35 +160,58 @@ class UPReraSpider(scrapy.Spider):
     
     def parse_project_detail(self, response):
         """
-        Parse detailed project information
-        
-        NOTE: You MUST update these CSS selectors by inspecting a project detail page
-        
-        To inspect:
-        1. Click on a project from search results
-        2. Right-click on each field > Inspect
-        3. Note the span/label IDs and classes
-        4. Update selectors below
+        Parse detailed project information with flexible field extraction
         """
-        project_name = response.meta.get('project_name', '')
-        registration_no = response.meta.get('registration_no', '')
-        location = response.meta.get('location', '')
+        # Handle 404 errors
+        if response.status == 404:
+            self.logger.warning(f"404 error for {response.url}")
+            return
         
-        # TODO: Update all these selectors based on actual page structure
+        # Get data from meta (already collected from table)
+        project_name = response.meta.get('project_name', '').strip()
+        registration_no = response.meta.get('registration_no', '').strip()
+        promoter_name = response.meta.get('promoter_name', '').strip()
+        district = response.meta.get('district', 'Lucknow').strip()
+        project_type = response.meta.get('project_type', '').strip()
+        
+        # Try to extract additional details from page text (flexible approach)
+        page_text = response.css('body').get() or ''
+        
+        # Extract project address from text
+        location = ''
+        address_patterns = [
+            r'Project Address\s*:\s*([^\n]+)',
+            r'Address\s*:\s*([^\n]+)',
+        ]
+        for pattern in address_patterns:
+            import re
+            match = re.search(pattern, page_text, re.IGNORECASE)
+            if match:
+                location = match.group(1).strip()
+                break
+        
+        # Extract completion date
+        completion_date = ''
+        date_patterns = [
+            r'Proposed Completion Date\s*:\s*([0-9-/]+)',
+            r'Completion Date\s*:\s*([0-9-/]+)',
+        ]
+        for pattern in date_patterns:
+            import re
+            match = re.search(pattern, page_text, re.IGNORECASE)
+            if match:
+                completion_date = match.group(1).strip()
+                break
+        
+        # Build project data
         project_data = {
-            'project_name': project_name or response.css('span#lblProjectName::text').get(),
-            'registration_number': registration_no or response.css('span#lblRegistrationNo::text').get(),
-            'location': location or response.css('span#lblLocation::text').get(),
-            'district': 'Lucknow',
-            'promoter_name': response.css('span#lblPromoterName::text').get(),
-            'project_type': response.css('span#lblProjectType::text').get(),
-            'project_area': response.css('span#lblProjectArea::text').get(),
-            'total_units': response.css('span#lblTotalUnits::text').get(),
-            'status': response.css('span#lblStatus::text').get(),
-            'completion_date': response.css('span#lblCompletionDate::text').get(),
-            'amenities': response.css('span#lblAmenities::text').get(),
-            'description': response.css('span#lblDescription::text').get(),
-            'sanctions': response.css('span#lblSanctions::text').get(),
+            'project_name': project_name,
+            'registration_number': registration_no,
+            'location': location or 'Lucknow',
+            'district': district,
+            'promoter_name': promoter_name,
+            'project_type': project_type,
+            'completion_date': completion_date,
             
             # Metadata
             'source': 'UP-RERA',
@@ -157,7 +220,7 @@ class UPReraSpider(scrapy.Spider):
         }
         
         # Determine area from location
-        area = self.extract_area(location or project_data.get('location', ''))
+        area = self.extract_area(location or project_name)
         project_data['area'] = area
         
         yield project_data
@@ -176,6 +239,13 @@ class UPReraSpider(scrapy.Spider):
                 return area
         
         return 'Other Lucknow'
+    
+    def handle_error(self, failure):
+        """
+        Handle request errors (404, timeouts, etc.)
+        """
+        self.logger.error(f"Request failed: {failure.request.url}")
+        self.logger.error(f"Error: {failure.value}")
 
 
 # Pipeline to save data to JSON
