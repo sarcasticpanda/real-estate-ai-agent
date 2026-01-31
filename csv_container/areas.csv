@@ -1,0 +1,10 @@
+area_id,area_name_normalized,area_name_original,city,state,pincode,latitude,longitude,source_confidence 
+AREA001,gomtinagar_extension,Gomtinagar Extension,Lucknow,Uttar Pradesh,226010,26.85,81.02,exact
+AREA002,ashiana,Ashiana,Lucknow,Uttar Pradesh,226012,26.79,80.92,exact
+AREA003,alambagh,Alambagh,Lucknow,Uttar Pradesh,226005,26.802,80.908,exact
+AREA004,hazratganj,Hazratganj,Lucknow,Uttar Pradesh,226001,26.859,80.946,exact
+AREA005,chowk,Chowk,Lucknow,Uttar Pradesh,226003,26.869,80.912,exact
+AREA006,thakurganj,Thakurganj,Lucknow,Uttar Pradesh,226003,26.865,80.925,exact
+AREA004,hazratganj,Hazratganj,Lucknow,Uttar Pradesh,226001,26.859,80.946,exact
+AREA005,chowk,Chowk,Lucknow,Uttar Pradesh,226003,26.869,80.912,exact
+AREA006,para,Para,Lucknow,Uttar Pradesh,226003,26.802,80.908,exact

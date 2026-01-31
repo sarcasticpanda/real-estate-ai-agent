@@ -1,0 +1,111 @@
+property_id,property_type,bhk,price_inr,price_unit,area_sqft,area_unit_original,price_per_sqft,furnishing,transaction_type,ownership,facing,current_floor,total_floors,covered_parking,open_parking,construction_age_bucket,area_id,raw_text_available 
+PROP001,Flat,3,17000000,Cr,1444,Sqft,11773,Unfurnished,Resale,Freehold,East,5,12,1,1,New Construction,AREA001,YES
+PROP002,Independent House,5,23000000,Cr,3500,Sqft,6428,Furnished,Resale,Freehold,West,0,2,1,2,15-20 years,AREA002,YES
+PROP003,Independent House,6,35000000,Cr,4500,Sqft,7778,Furnished,Resale,Freehold,East,1,2,2,2,15-20 years,AREA002,YES
+PROP004,Independent House,4,16400000,Cr,3000,Sqft,5500,Furnished,Resale,Freehold,South,0,2,1,2,5-10 years,AREA002,YES
+PROP005,Independent House,4,15000000,Cr,3000,Sqft,5000,Furnished,Resale,Freehold,South,0,2,1,1,10-15 years,AREA002,YES
+PROP006,Independent House,4,28500000,Cr,4500,Sqft,6333,Furnished,Resale,Freehold,East,0,2,1,2,15-20 years,AREA002,YES
+PROP007,Independent House,4,9000000,Lac,1600,Sqft,5625,Unfurnished,Resale,Freehold,South,0,3,0,0,15-20 years,AREA002,YES
+PROP008,Independent House,6,29700000,Cr,2400,Sqft,12375,Unfurnished,Resale,Freehold,,0,3,0,0,15-20 years,AREA002,YES
+PROP009,Independent House,7,21000000,Cr,4000,Sqft,5250,Semi-Furnished,Resale,Freehold,North,0,3,1,2,>20 years,AREA002,YES
+PROP010,Independent House,10,50700000,Cr,2500,Sqft,20280,Semi-Furnished,Resale,Freehold,East,0,2,2,2,<5 years,AREA002,YES
+PROP011,Independent House,2,19000000,Cr,1508,Sqft,12599,Semi-Furnished,Resale,Freehold,South,0,1,1,2,15-20 years,AREA002,YES
+PROP012,Plot,0,37000000,Cr,3700,Sqft,,Resale,Freehold,West,,3,0,0,Unknown,AREA002,YES
+PROP013,Plot,0,13000000,Cr,1935,Sqft,,Resale,Freehold,South,,3,0,0,Unknown,AREA002,YES
+PROP014,Plot,0,24500000,Cr,3557,Sqft,,Resale,Freehold,North,,3,0,0,Unknown,AREA002,YES
+PROP015,Shop,0,7400000,Lac,338,Sqft,21896,Unfurnished,New Property,Freehold,East,1,4,0,1,Under Construction,AREA002,YES
+PROP016,Independent House,4,15000000,Cr,2500,Sqft,6818,Furnished,New Property,Freehold,West,0,2,1,2,5-10 years,AREA002,YES
+PROP017,Independent House,5,7800000,Lac,969,Sqft,8049,Unfurnished,Resale,Freehold,South,0,2,0,1,<5 years,AREA002,YES
+PROP018,Flat,3,5500000,Lac,1464,Sqft,3757,Semi-Furnished,Resale,Freehold,,1,5,0,0,5-10 years,AREA002,YES
+PROP019,Independent House,2,4500000,Lac,800,Sqft,5625,Semi-Furnished,New Property,Freehold,,0,1,0,0,5-10 years,AREA002,YES
+PROP020,Independent House,7,14000000,Cr,1240,Sqft,11290,Semi-Furnished,Resale,Freehold,,0,2,0,0,15-20 years,AREA002,YES
+PROP021,Flat,2,7500000,Lac,1060,Sqft,7075,Unfurnished,Resale,Freehold,,2,4,0,0,>20 years,AREA002,YES
+PROP022,Flat,1,4320000,Lac,995,Sqft,4338,Semi-Furnished,New Property,Freehold,North - East,2,7,1,0,<5 years,AREA002,YES
+PROP023,Flat,2,4000000,Lac,875,Sqft,4575,Semi-Furnished,New Property,Freehold,North - East,3,9,1,0,<5 years,AREA002,YES
+PROP024,Flat,2,5030000,Lac,1156,Sqft,4348,Semi-Furnished,New Property,Freehold,North - East,4,7,1,0,<5 years,AREA002,YES
+PROP025,Flat,3,6500000,Lac,1385,Sqft,4693,Semi-Furnished,Resale,Freehold,North - East,7,7,0,0,Unknown,AREA002,YES
+PROP026,Flat,1,1100000,Lac,269,Sqft,44000,Semi-Furnished,Resale,Freehold,,1,1,0,0,5-10 years,AREA001,YES
+PROP027,Flat,2,1200000,Lac,450,Sqft,2664,Semi-Furnished,New Property,Freehold,East,0,2,0,0,Unknown,AREA001,YES
+PROP028,Flat,1,1450000,Lac,360,Sqft,4028,Semi-Furnished,Resale,Freehold,,3,3,0,0,5-10 years,AREA001,YES
+PROP029,Independent House,1,2000000,Lac,360,Sqft,5553,Unfurnished,Resale,Co-operative Society,West,1,1,0,0,New Construction,AREA001,YES
+PROP030,Flat,1,2600000,Lac,400,Sqft,6500,Furnished,Resale,Freehold,East,5,12,1,0,Unknown,AREA001,YES
+PROP031,Independent House,2,2900000,Lac,700,Sqft,4143,Furnished,Resale,Freehold,,0,2,1,0,Unknown,AREA001,YES
+PROP032,Independent House,2,3100000,Lac,1800,Sqft,1722,Unfurnished,Resale,Freehold,,1,3,0,0,Unknown,AREA001,YES
+PROP033,Flat,2,3600000,Lac,700,Sqft,5143,Semi-Furnished,Resale,Freehold,,2,3,0,0,5-10 years,AREA001,YES
+PROP034,Flat,2,4000000,Lac,750,Sqft,5333,Semi-Furnished,Resale,Freehold,,2,3,0,0,10-15 years,AREA001,YES
+PROP035,Builder Floor,2,5000000,Lac,750,Sqft,6667,Unfurnished,Resale,Freehold,,1,4,0,0,Unknown,AREA001,YES
+PROP036,Flat,2,5800000,Lac,1125,Sqft,5156,Unfurnished,Resale,Freehold,East,5,18,0,0,Under Construction,AREA001,YES
+PROP037,Independent House,3,6000000,Lac,1000,Sqft,6000,Semi-Furnished,New Property,Freehold,North,0,3,0,1,New Construction,AREA001,YES
+PROP038,Independent House,3,6500000,Lac,1350,Sqft,4815,Semi-Furnished,Resale,Freehold,East,0,2,0,0,New Construction,AREA001,YES
+PROP039,Independent House,3,6800000,Lac,1000,Sqft,6800,Furnished,New Property,Freehold,East,0,2,0,0,New Construction,AREA001,YES
+PROP040,Flat,2,7100000,Lac,780,Sqft,9103,Semi-Furnished,Resale,Freehold,South - West,3,18,6,0,Unknown,AREA001,YES
+PROP041,Flat,3,25500000,Cr,1496,Sqft,17045,Semi-Furnished,New Property,Freehold,North - East,10,36,1,1,Unknown,AREA001,YES
+PROP042,Flat,3,19900000,Cr,1428,Sqft,13988,Semi-Furnished,New Property,Freehold,North - West,29,30,0,0,Under Construction,AREA001,YES
+PROP043,Flat,3,10000000,Cr,864,Sqft,11574,Unfurnished,Resale,Freehold,East,0,2,0,0,<5 years,AREA001,YES
+PROP044,Flat,3,27600000,Cr,2915,Sqft,9500,Unfurnished,New Property,Freehold,,0,0,0,0,Under Construction,AREA001,YES
+PROP045,Independent House,4,112600000,Cr,9559,Sqft,11785,Unfurnished,New Property,Freehold,,0,0,0,1,Under Construction,AREA001,YES
+PROP046,Independent House,4,15000000,Cr,1250,Sqft,12000,Semi-Furnished,Resale,Freehold,East,0,3,1,0,<5 years,AREA001,YES
+PROP047,Flat,3,25000000,Cr,1206,Sqft,20730,Semi-Furnished,Resale,Freehold,,10,18,1,0,<5 years,AREA001,YES
+PROP048,Builder Floor,3,8200000,Lac,1545,Sqft,5307,Semi-Furnished,Resale,Freehold,South - East,1,3,2,0,Unknown,AREA001,YES
+PROP049,Independent House,1,2700000,Lac,540,Sqft,5000,Semi-Furnished,Resale,Freehold,,0,1,0,0,Unknown,AREA001,YES
+PROP050,Flat,3,5500000,Lac,1464,Sqft,3757,Semi-Furnished,Resale,Freehold,,1,5,0,0,5-10 years,AREA003,YES
+PROP051,Flat,3,8500000,Lac,1812,Sqft,4691,Unfurnished,Resale,Freehold,,1,4,0,0,New Construction,AREA003,YES
+PROP052,Independent House,3,4800000,Lac,960,Sqft,5000,Semi-Furnished,New Property,Freehold,East,0,1,0,0,<5 years,AREA003,YES
+PROP053,Independent House,3,3920000,Lac,1750,Sqft,2240,Semi-Furnished,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP054,Builder Floor,3,6500000,Lac,1285,Sqft,5058,Semi-Furnished,Resale,Freehold,,2,5,0,0,Unknown,AREA003,YES
+PROP055,Independent House,3,23000000,Cr,3350,Sqft,6866,Semi-Furnished,Resale,Freehold,,0,3,0,0,Unknown,AREA003,YES
+PROP056,Independent House,3,3500000,Lac,700,Sqft,5000,Unfurnished,Resale,Freehold,,0,3,0,0,Unknown,AREA003,YES
+PROP057,Independent House,3,2100000,Lac,900,Sqft,2333,Furnished,Resale,Freehold,,0,1,1,0,<5 years,AREA003,YES
+PROP058,Independent House,3,5500000,Lac,1500,Sqft,3667,Semi-Furnished,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP059,Independent House,2,4750000,Lac,1000,Sqft,4750,Furnished,New Property,Freehold,North - East,1,1,1,0,New Construction,AREA003,YES
+PROP060,Independent House,4,8000000,Lac,2300,Sqft,3478,Semi-Furnished,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP061,Flat,4,10000000,Cr,1680,Sqft,5952,Semi-Furnished,New Property,Freehold,,4,6,0,0,10-15 years,AREA003,YES
+PROP062,Independent House,2,5500000,Lac,1000,Sqft,5500,Semi-Furnished,Resale,Freehold,East,1,1,0,0,<5 years,AREA003,YES
+PROP063,Builder Floor,2,4500000,Lac,1100,Sqft,4091,Unfurnished,Resale,Freehold,,3,5,0,0,Unknown,AREA003,YES
+PROP064,Flat,2,5500000,Lac,1210,Sqft,4545,Furnished,Resale,Freehold,,4,4,0,0,<5 years,AREA003,YES
+PROP065,Independent House,2,3500000,Lac,450,Sqft,7778,Semi-Furnished,Resale,Freehold,North,0,1,0,0,5-10 years,AREA003,YES
+PROP066,Independent House,2,3500000,Lac,567,Sqft,6173,Semi-Furnished,Resale,Freehold,,1,1,0,0,Unknown,AREA003,YES
+PROP067,Independent House,4,4200000,Lac,2400,Sqft,1750,Semi-Furnished,Resale,Freehold,,1,2,0,0,Unknown,AREA003,YES
+PROP068,Independent House,4,11000000,Cr,3000,Sqft,3667,Furnished,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP069,Independent House,2,3260000,Lac,0,Sqft,0,Unknown,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP070,Builder Floor,2,2000000,Lac,630,Sqft,3175,Semi-Furnished,Resale,Freehold,,1,4,1,0,New Construction,AREA003,YES
+PROP071,Independent House,2,1300000,Lac,580,Sqft,2241,Unfurnished,Resale,Freehold,,0,0,0,0,Unknown,AREA003,YES
+PROP072,Builder Floor,2,2500000,Lac,700,Sqft,3571,Unfurnished,Resale,Freehold,,0,3,0,0,Unknown,AREA003,YES
+PROP073,Independent House,5,42500000,Cr,4000,Sqft,10625,Semi-Furnished,Resale,Freehold,North - West,0,2,1,0,10-15 years,AREA003,YES
+PROP074,Independent House,1,900000,Lac,402,Sqft,2239,Semi-Furnished,Resale,Freehold,,1,1,0,0,Unknown,AREA003,YES
+PROP075,Independent House,1,4500000,Lac,800,Sqft,5625,Unfurnished,Resale,Freehold,North,0,0,0,1,Unknown,AREA003,YES
+PROP076,Independent House,5,9000000,Lac,2000,Sqft,4500,Furnished,Resale,Freehold,North - East,0,0,0,0,15-20 years,AREA003,YES
+PROP077,Flat,2,5000000,Lac,900,Sqft,5556,Semi-Furnished,Resale,Freehold,,3,4,1,0,Unknown,AREA004,YES
+PROP078,Independent House,2,1750000,Lac,500,Sqft,3500,Unfurnished,Resale,Freehold,,0,2,0,0,Unknown,AREA004,YES
+PROP079,Flat,2,8500000,Lac,985,Sqft,8629,Semi-Furnished,Resale,Freehold,South,8,12,0,0,10-15 years,AREA004,YES
+PROP080,Flat,2,9000000,Lac,1070,Sqft,8411,Semi-Furnished,Resale,Freehold,North,2,8,1,0,Unknown,AREA004,YES
+PROP081,Flat,3,22500000,Cr,1500,Sqft,15000,Semi-Furnished,Resale,Freehold,North - East,6,9,1,0,Unknown,AREA004,YES
+PROP082,Flat,3,9200000,Lac,1200,Sqft,7667,Furnished,Resale,Freehold,North,5,6,0,0,<5 years,AREA004,YES
+PROP083,Independent House,3,35000000,Cr,2300,Sqft,15217,Furnished,Resale,Freehold,North - East,2,2,0,0,New Construction,AREA005,YES
+PROP084,Flat,2,7500000,Lac,810,Sqft,37500,Unfurnished,Resale,Freehold,,3,4,0,0,<5 years,AREA004,YES
+PROP085,Flat,2,5800000,Lac,990,Sqft,5859,Unfurnished,Resale,Freehold,,1,5,0,0,<5 years,AREA004,YES
+PROP086,Flat,3,12500000,Cr,1350,Sqft,9259,Semi-Furnished,Resale,Freehold,West,3,6,0,0,5-10 years,AREA004,YES
+PROP087,Builder Floor,3,6000000,Lac,1250,Sqft,4800,Unfurnished,New Property,Freehold,North - West,3,3,0,0,New Construction,AREA004,YES
+PROP088,Independent House,6,4500000,Lac,325,Sqft,13846,Unfurnished,Resale,Freehold,,0,1,0,0,Unknown,AREA005,YES
+PROP089,Independent House,3,12500000,Cr,1689,Sqft,7401,Furnished,New Property,Freehold,South,0,0,0,0,New Construction,AREA005,YES
+PROP090,Independent House,5,6000000,Lac,800,Sqft,7500,Semi-Furnished,Resale,Freehold,East,3,3,0,0,>20 years,AREA005,YES
+PROP091,Flat,3,3000000,Lac,1000,Sqft,3000,Unfurnished,Resale,Freehold,,2,3,0,0,<5 years,AREA005,YES
+PROP092,Flat,2,4000000,Lac,1100,Sqft,3636,Semi-Furnished,Resale,Freehold,East,2,2,1,0,New Construction,AREA005,YES
+PROP093,Independent House,3,4000000,Lac,675,Sqft,5926,Semi-Furnished,Resale,Freehold,,0,2,0,0,5-10 years,AREA006,YES
+PROP094,Flat,2,5000000,Lac,900,Sqft,5556,Semi-Furnished,Resale,Freehold,,3,4,1,0,Unknown,AREA004,YES
+PROP095,Independent House,2,1750000,Lac,500,Sqft,3500,Unfurnished,Resale,Freehold,,0,2,0,0,Unknown,AREA004,YES
+PROP096,Flat,2,8500000,Lac,985,Sqft,8629,Semi-Furnished,Resale,Freehold,South,8,12,0,0,10-15 years,AREA004,YES
+PROP097,Flat,2,9000000,Lac,1070,Sqft,8411,Semi-Furnished,Resale,Freehold,North,2,8,1,0,Unknown,AREA004,YES
+PROP098,Flat,3,22500000,Cr,1500,Sqft,15000,Semi-Furnished,Resale,Freehold,North - East,6,9,1,0,Unknown,AREA004,YES
+PROP099,Flat,3,9200000,Lac,1200,Sqft,7667,Furnished,Resale,Freehold,North,5,6,0,0,<5 years,AREA004,YES
+PROP100,Independent House,3,35000000,Cr,2300,Sqft,15217,Furnished,Resale,Freehold,North - East,2,2,0,0,New Construction,AREA005,YES
+PROP101,Flat,2,7500000,Lac,810,Sqft,37500,Unfurnished,Resale,Freehold,,3,4,0,0,<5 years,AREA004,YES
+PROP102,Flat,2,5800000,Lac,990,Sqft,5859,Unfurnished,Resale,Freehold,,1,5,0,0,<5 years,AREA004,YES
+PROP103,Flat,3,12500000,Cr,1350,Sqft,9259,Semi-Furnished,Resale,Freehold,West,3,6,0,0,5-10 years,AREA004,YES
+PROP104,Builder Floor,3,6000000,Lac,1250,Sqft,4800,Unfurnished,New Property,Freehold,North - West,3,3,0,0,New Construction,AREA004,YES
+PROP105,Independent House,6,4500000,Lac,325,Sqft,13846,Unfurnished,Resale,Freehold,,0,1,0,0,Unknown,AREA005,YES
+PROP106,Independent House,3,12500000,Cr,1689,Sqft,7401,Furnished,New Property,Freehold,South,0,0,0,0,New Construction,AREA005,YES
+PROP107,Independent House,5,6000000,Lac,800,Sqft,7500,Semi-Furnished,Resale,Freehold,East,3,3,0,0,>20 years,AREA005,YES
+PROP108,Flat,3,3000000,Lac,1000,Sqft,3000,Unfurnished,Resale,Freehold,,2,3,0,0,<5 years,AREA005,YES
+PROP109,Flat,2,4000000,Lac,1100,Sqft,3636,Semi-Furnished,Resale,Freehold,East,2,2,1,0,New Construction,AREA005,YES
+PROP110,Independent House,3,4000000,Lac,675,Sqft,5926,Semi-Furnished,Resale,Freehold,,0,2,0,0,5-10 years,AREA006,YES
