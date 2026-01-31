@@ -1,6 +1,7 @@
 # EXECUTION GUIDE: Real Estate Data Collection
 **Complete workflow for collecting and organizing Lucknow real estate data**
 
+---
 
 ## 🎯 OVERVIEW
 
@@ -14,6 +15,7 @@ This guide walks through the complete data collection process:
 
 **Total Time**: 5-8 hours (mostly automated)
 
+---
 
 ## STEP 1: INSTALL SCRAPY
 
@@ -36,7 +38,11 @@ Scrapy 2.11.x
 ```
 
 **If Fails**:
+- Ensure venv is activated
+- Check pip is up to date: `.\venv\Scripts\python.exe -m pip install --upgrade pip`
+- Try: `.\venv\Scripts\python.exe -m pip install scrapy==2.11.0`
 
+---
 
 ## STEP 2: INSPECT UP-RERA WEBSITE ⚠️ CRITICAL
 
@@ -53,6 +59,10 @@ Scrapy 2.11.x
 
 ### 2.2 Inspect Search Form
 **Find**: District dropdown and Search button
+- Right-click dropdown → Inspect
+- Note the `name` attribute (e.g., `ctl00$ContentPlaceHolder1$ddlDistrict`)
+- Right-click Search button → Inspect
+- Note the `name` attribute
 
 **Update in**: `scripts/uprera_spider.py` **lines 60-67**
 ```python
@@ -100,6 +110,7 @@ location = row.css('td:nth-child(ACTUAL_COL_NUM)::text').get()
 ### 2.5 Save Changes
 After updating all selectors, save `scripts/uprera_spider.py`
 
+---
 
 ## STEP 3: RUN UP-RERA SCRAPER
 
@@ -116,6 +127,8 @@ After updating all selectors, save `scripts/uprera_spider.py`
 ```
 
 **Expected Duration**: 2-4 hours
+- Polite crawling: 3-second delay between requests
+- Estimated: 500-1000 projects for Lucknow
 
 **Expected Output**:
 ```
@@ -136,7 +149,11 @@ After updating all selectors, save `scripts/uprera_spider.py`
 4. Consider increasing `DOWNLOAD_DELAY` to 5-10 seconds
 
 **Troubleshooting**:
+- **No data collected**: CSS selectors incorrect (go back to Step 2)
+- **Empty fields**: Check selector accuracy on detail pages
+- **HTTP 403/429**: Increase delay, respect rate limits
 
+---
 
 ## STEP 4: RUN DUCKDUCKGO COLLECTOR
 
@@ -148,6 +165,8 @@ After updating all selectors, save `scripts/uprera_spider.py`
 ```
 
 **Expected Duration**: 1-2 hours
+- Searches for each area + property type combination
+- LLM extraction of structured data
 
 **Expected Output**:
 ```
@@ -172,7 +191,11 @@ Saved to: data/properties_realtime.json
 **Output File**: `data/properties_realtime.json`
 
 **Troubleshooting**:
+- **API timeout**: Wait a few minutes, retry
+- **Low extraction rate**: Check LLM model availability
+- **No results**: DuckDuckGo may rate limit, try later
 
+---
 
 ## STEP 5: MANUAL LOCALITY DATA ENTRY
 
@@ -199,6 +222,7 @@ Saved to: data/properties_realtime.json
 
 **Output File**: `data/locality_info.json`
 
+---
 
 ## STEP 6: CONSOLIDATE DATA
 
@@ -238,7 +262,15 @@ Total property listings: 87
 ```
 
 **Output Files**:
+- `cleaned_data/area_wise/gomti_nagar.json`
+- `cleaned_data/area_wise/alambagh.json`
+- `cleaned_data/area_wise/hazratganj.json`
+- `cleaned_data/area_wise/indira_nagar.json`
+- `cleaned_data/area_wise/aliganj.json`
+- `cleaned_data/area_wise/other_lucknow.json`
+- `cleaned_data/area_wise/summary.json`
 
+---
 
 ## STEP 7: VALIDATE DATA
 
@@ -265,6 +297,7 @@ Validating rera_projects.json...
 Clean data saved to: cleaned_data/
 ```
 
+---
 
 ## 📊 FINAL VERIFICATION
 
@@ -280,26 +313,47 @@ Clean data saved to: cleaned_data/
 .\venv\Scripts\python.exe -c "import json; print(json.dumps(json.load(open('cleaned_data/area_wise/summary.json', encoding='utf-8')), indent=2))"
 ```
 
+---
 
 ## ✅ SUCCESS CRITERIA
 
 **Data Collection Complete When**:
+- ✅ `data/rera_projects.json` has 500+ projects
+- ✅ `data/properties_realtime.json` has 50+ listings
+- ✅ `data/locality_info.json` has data for 5 areas
+- ✅ `cleaned_data/area_wise/` has 5-6 area JSON files
+- ✅ Each area file has RERA projects + listings + locality info
 
+---
 
 ## 🚨 COMMON ISSUES
 
 ### Issue: Scrapy spider collects no data
 **Solution**: CSS selectors are incorrect
+- Go back to Step 2
+- Carefully inspect UP-RERA website
+- Update all selectors in `uprera_spider.py`
 
 ### Issue: CAPTCHA blocks scraping
 **Solution**: Manual intervention
+- Pause scraper (Ctrl+C)
+- Solve CAPTCHA in browser
+- Increase `DOWNLOAD_DELAY` to 5-10 seconds
+- Resume scraper
 
 ### Issue: DuckDuckGo returns no results
 **Solution**: Rate limiting
+- Wait 10-15 minutes
+- Run script again
+- Consider reducing areas/property types
 
 ### Issue: LLM extraction fails
 **Solution**: API issues
+- Check OpenRouter API key is valid
+- Check internet connection
+- Try different model: `meta-llama/llama-3.2-1b-instruct:free`
 
+---
 
 ## 📁 EXPECTED FOLDER STRUCTURE (After Completion)
 
@@ -332,6 +386,7 @@ real-estate-ai-agent/
     └── scraping.log
 ```
 
+---
 
 ## 🎯 NEXT PHASE: RAG AGENT
 
@@ -342,5 +397,9 @@ After data collection is complete:
 4. **Add buyer qualification** logic
 5. **Implement scheduling** automation
 
+---
 
 **Need Help?**
+- Check console output for specific errors
+- Review logs in `logs/` directory
+- Verify CSS selectors match current UP-RERA website structure

@@ -6,3 +6,20 @@ openai>=1.0.0
 lxml==5.1.0
 duckduckgo-search>=5.0.0
 scrapy>=2.11.0
+
+# For build_rag_documents.py
+openpyxl
+xlrd
+numpy
+python-dateutil
+pytz
+tzdata
+setuptools
+wheel
+six
+typing-extensions
+jsonschema
+certifi
+idna
+charset-normalizer
+urllib3
