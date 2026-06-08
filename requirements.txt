@@ -1,3 +1,4 @@
+# ── Existing (data collection) ────────────────────────────────────────────────
 requests==2.31.0
 beautifulsoup4==4.12.3
 pandas==2.2.0
@@ -6,8 +7,6 @@ openai>=1.0.0
 lxml==5.1.0
 duckduckgo-search>=5.0.0
 scrapy>=2.11.0
-
-# For build_rag_documents.py
 openpyxl
 xlrd
 numpy
@@ -23,3 +22,25 @@ certifi
 idna
 charset-normalizer
 urllib3
+
+# ── Geocoding & POI enrichment (free, no API key) ────────────────────────────
+geopy>=2.4.0       # Nominatim client (address → lat/lng)
+overpy>=0.7.0      # Overpass API client (lat/lng → nearby POIs)
+
+# ── Embeddings (runs locally, free) ──────────────────────────────────────────
+sentence-transformers>=2.7.0
+torch>=2.0.0
+
+# ── Supabase (vector DB + backend) ───────────────────────────────────────────
+supabase>=2.0.0
+
+# ── LLM — Groq (free tier: 14,400 req/day) ───────────────────────────────────
+groq>=0.4.0
+
+# ── Web API & chat interface ──────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9   # needed for FastAPI file uploads
+
+# ── Telegram bot (optional — needed only if using Telegram interface) ─────────
+python-telegram-bot>=21.0
