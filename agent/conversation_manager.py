@@ -31,7 +31,9 @@ class ConversationManager:
         """Load session from Supabase."""
         session = get_session(self.session_id)
         self.messages = session.get("messages") or []
-        self.requirements = session.get("requirements") or {}
+        raw_req = session.get("requirements") or {}
+        self._recommendation_count: int = int(raw_req.pop("_recommendation_count", 0))
+        self.requirements = raw_req
         self.stage = session.get("stage") or "discovery"
         self._loaded = True
         logger.debug(f"Loaded session {self.session_id}: stage={self.stage}, messages={len(self.messages)}")
@@ -41,9 +43,15 @@ class ConversationManager:
         save_session(
             session_id=self.session_id,
             messages=self.messages[-MAX_HISTORY_MESSAGES:],
-            requirements=self.requirements,
+            requirements={**self.requirements, "_recommendation_count": self._recommendation_count},
             stage=self.stage,
         )
+
+    def get_recommendation_count(self) -> int:
+        return getattr(self, "_recommendation_count", 0)
+
+    def increment_recommendation_count(self) -> None:
+        self._recommendation_count = getattr(self, "_recommendation_count", 0) + 1
 
     def add_user_message(self, content: str) -> None:
         self.messages.append({

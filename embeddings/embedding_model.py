@@ -103,18 +103,20 @@ def build_semantic_text(prop: dict) -> str:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _format_price(price_inr: int | float) -> str:
-    """Convert raw INR to human-readable crore/lakh string for semantic search.
-    No currency symbol — users query '1.5 crore flat' not symbol variants."""
+    """Include both the raw INR number and the human-readable label so the
+    embedding captures both numeric and conversational price queries.
+    E.g. 15000000 → '15000000 INR 1.5 crore'
+    SQL hard-filter handles the actual range; this is for semantic context."""
     p = int(price_inr)
     if p >= 10_000_000:
         val = p / 10_000_000
-        s = f"{val:.2g}" if val != int(val) else str(int(val))
-        return f"{s} crore"
-    if p >= 100_000:
+        label = f"{val:.2g} crore" if val != int(val) else f"{int(val)} crore"
+    elif p >= 100_000:
         val = p / 100_000
-        s = f"{val:.2g}" if val != int(val) else str(int(val))
-        return f"{s} lakh"
-    return str(p)
+        label = f"{val:.2g} lakh" if val != int(val) else f"{int(val)} lakh"
+    else:
+        label = str(p)
+    return f"{p} INR {label}"
 
 
 def _add_poi(parts: list[str], conn: dict, key: str, label: str) -> None:

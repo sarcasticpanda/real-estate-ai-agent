@@ -28,52 +28,32 @@ def _get_groq_client() -> Groq:
 def extract_intent(message: str, conversation_history: list[dict] | None = None) -> dict:
     """
     Extract structured requirements from the user's message.
-
-    Returns a dict like:
-    {
-        "city": "Lucknow",
-        "area": "Gomti Nagar",
-        "bhk": 3,
-        "max_budget_cr": 2.0,
-        "min_budget_cr": null,
-        "property_type": "flat",
-        "furnishing": null,
-        "amenities": ["gym", "swimming pool"],
-        "nearby": ["metro", "school"],
-        "intent": "buy",
-        "is_lead_ready": false
-    }
+    Returns a dict with city, area, bhk, budget, amenities, nearby, lead_intent_level, etc.
     """
     from rag.prompts import INTENT_EXTRACTION_PROMPT
 
-    prompt = INTENT_EXTRACTION_PROMPT.format(message=message)
-
-    # Include recent conversation context for multi-turn understanding
-    messages = []
+    history_text = ""
     if conversation_history:
-        # Last 4 exchanges for context
-        messages = conversation_history[-8:]
-    messages.append({"role": "user", "content": prompt})
+        recent = conversation_history[-6:]
+        history_text = "\n".join(
+            f"{m['role'].title()}: {m['content']}" for m in recent
+        )
+
+    prompt = INTENT_EXTRACTION_PROMPT.format(message=message, history=history_text)
 
     try:
         client = _get_groq_client()
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
-            messages=messages,
-            temperature=0.1,  # low temperature for structured extraction
-            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,  # deterministic for structured extraction
+            max_tokens=500,
+            response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content.strip()
-
-        # Clean up any markdown fences the model might add
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
         extracted = json.loads(raw)
         logger.info(f"Extracted intent: {extracted}")
-        return extracted
+        return _normalise(extracted)
 
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Intent extraction failed: {e} — returning empty requirements")
@@ -82,14 +62,62 @@ def extract_intent(message: str, conversation_history: list[dict] | None = None)
 
 def merge_requirements(existing: dict, new_extraction: dict) -> dict:
     """
-    Merge newly extracted requirements into the session's accumulated requirements.
-    New values override existing only when they are not null.
+    Accumulate requirements across conversation turns.
+    New non-null values override existing. Lists are merged (deduplicated).
     """
     merged = dict(existing)
     for key, value in new_extraction.items():
-        if value is not None and value != [] and value != "":
+        if value is None or value == "":
+            continue
+        if isinstance(value, list):
+            existing_list = merged.get(key, []) or []
+            combined = list(dict.fromkeys(existing_list + value))  # dedup, preserve order
+            merged[key] = combined
+        else:
             merged[key] = value
     return merged
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _normalise(extracted: dict) -> dict:
+    """Sanitise and fill defaults on raw Groq output."""
+    result = _empty_requirements()
+
+    for key in ["city", "area", "bhk", "min_budget_cr", "max_budget_cr",
+                "property_type", "furnishing", "intent",
+                "named_landmark", "named_landmark_max_km"]:
+        v = extracted.get(key)
+        if v is not None and v != "null":
+            result[key] = v
+
+    for list_key in ["amenities", "nearby"]:
+        v = extracted.get(list_key)
+        if isinstance(v, list) and v:
+            result[list_key] = [str(x) for x in v]
+
+    # lead_intent_level: "none" | "soft" | "strong"
+    level = str(extracted.get("lead_intent_level", "none")).lower()
+    if level not in ("none", "soft", "strong"):
+        level = "none"
+    result["lead_intent_level"] = level
+
+    # For backwards compatibility: is_lead_ready = strong intent
+    result["is_lead_ready"] = (level == "strong")
+
+    # Default city
+    if not result.get("city"):
+        result["city"] = "Lucknow"
+
+    # Coerce types
+    if result.get("bhk") is not None:
+        result["bhk"] = int(result["bhk"])
+    if result.get("max_budget_cr") is not None:
+        result["max_budget_cr"] = float(result["max_budget_cr"])
+    if result.get("min_budget_cr") is not None:
+        result["min_budget_cr"] = float(result["min_budget_cr"])
+
+    return result
 
 
 def _empty_requirements() -> dict:
@@ -103,6 +131,9 @@ def _empty_requirements() -> dict:
         "furnishing": None,
         "amenities": [],
         "nearby": [],
+        "named_landmark": None,
+        "named_landmark_max_km": None,
         "intent": None,
+        "lead_intent_level": "none",
         "is_lead_ready": False,
     }
