@@ -17,7 +17,8 @@ from database.supabase_client import save_lead, get_broker_for_area
 logger = logging.getLogger(__name__)
 
 PHONE_RE = re.compile(r"(?:\+91[-\s]?)?[6-9]\d{9}")
-NAME_MIN_WORDS = 2
+# Single-word Indian names are common (Riya, Raj, Priya, Amit etc.)
+NAME_MIN_LEN = 2  # minimum character length for a name word
 
 
 def extract_name_and_phone(text: str) -> tuple[str | None, str | None]:
@@ -25,14 +26,19 @@ def extract_name_and_phone(text: str) -> tuple[str | None, str | None]:
     phone_match = PHONE_RE.search(text)
     phone = phone_match.group(0).replace(" ", "").replace("-", "") if phone_match else None
 
-    # Remove the phone from text, then try to get the remaining words as name
+    # Remove phone, strip filler phrases, collect name candidates
     text_without_phone = PHONE_RE.sub("", text).strip()
-    # Remove common filler words
-    for word in ["my name is", "name is", "i am", "i'm", "call me", "number is", "phone is"]:
-        text_without_phone = text_without_phone.lower().replace(word, "").strip()
+    text_lower = text_without_phone.lower()
+    for phrase in ["my name is", "name is", "i am", "i'm", "mera naam hai",
+                   "naam hai", "call me", "number is", "phone is", "yahan hai"]:
+        text_lower = text_lower.replace(phrase, "")
 
-    words = [w for w in text_without_phone.split() if w.isalpha() and len(w) > 1]
-    name = " ".join(words[:3]).title() if len(words) >= NAME_MIN_WORDS else None
+    # Rebuild with original casing where possible
+    words = [w.strip(",.;:!?") for w in text_without_phone.split()]
+    name_words = [w for w in words if w.isalpha() and len(w) >= NAME_MIN_LEN]
+
+    # 1 word is fine (single-name users are common), take up to 3
+    name = " ".join(name_words[:3]).title() if name_words else None
 
     return name, phone
 

@@ -30,10 +30,10 @@ Your rules:
 
 # ── Intent extraction ─────────────────────────────────────────────────────────
 
-INTENT_EXTRACTION_PROMPT = """You are extracting buyer requirements from a real estate chat message.
-Return ONLY valid JSON — no markdown, no explanation, just the JSON object.
+INTENT_EXTRACTION_PROMPT = """Extract real estate buyer requirements from the message below.
+Return ONLY a valid JSON object. No markdown, no explanation.
 
-Output schema (null for anything not mentioned):
+Schema (use null for anything not mentioned):
 {{
   "city": string or null,
   "area": string or null,
@@ -50,29 +50,43 @@ Output schema (null for anything not mentioned):
   "lead_intent_level": "none" | "soft" | "strong"
 }}
 
-PRICE CONVERSION RULES (critical):
-- "50 lakh" → max_budget_cr: 0.5
-- "75 lakh" → max_budget_cr: 0.75
-- "1 crore" or "1 cr" → max_budget_cr: 1.0
-- "1.5 crore" or "1.5 cr" or "डेढ़ करोड़" → max_budget_cr: 1.5
-- "2 crore" → max_budget_cr: 2.0
-- "50 to 80 lakh" → min_budget_cr: 0.5, max_budget_cr: 0.8
-- "1.5 to 2 crore" → min_budget_cr: 1.5, max_budget_cr: 2.0
-- Budget "under X" → max_budget_cr only; "above X" → min_budget_cr only
+━━━ BUDGET RULES (very important — get direction right) ━━━
+"under/below/up to/within/maximum/budget hai X" → max_budget_cr = X (UPPER limit)
+"above/at least/minimum/starting from X" → min_budget_cr = X (LOWER limit)
+"between X and Y" / "X to Y" → min_budget_cr = X AND max_budget_cr = Y
 
-LOCATION RULES:
-- "near metro", "near hospital", "near school" → nearby: ["metro"] / ["hospital"] / ["school"], named_landmark = null
-- "near CMS school", "near Charbagh", "near Phoenix Palassio" → named_landmark = exact name, nearby = []
-- "within 2 km of X" → named_landmark_max_km: 2.0 (else null, system defaults to 5 km)
+Conversion: 50 lakh = 0.5 cr | 75 lakh = 0.75 | 1 crore = 1.0 | 1.5 crore = 1.5 | 2 crore = 2.0
 
-LEAD INTENT DETECTION:
-- lead_intent_level "none": just browsing / asking for info
-- lead_intent_level "soft": shows interest but not asking to act — "this looks nice", "I like this one", "sounds good yaar", "interested in this area", "tell me more about this property", "do you have anything in Aliganj?"
-- lead_intent_level "strong": ready to act — "I want to visit", "how do I book?", "can I see this flat?", "give me the broker number", "schedule a visit", "I'll take this", "I'm interested, what next?"
+Examples:
+- "under 1.5 crore" → max_budget_cr: 1.5, min_budget_cr: null   ✓
+- "1.5 se 2 crore" → min_budget_cr: 1.5, max_budget_cr: 2.0     ✓
+- "budget 80 lakh" → max_budget_cr: 0.8, min_budget_cr: null    ✓
+- "budget hai 80 lakh" → max_budget_cr: 0.8, min_budget_cr: null ✓  (Hindi: "budget hai X" = my budget is X = max)
+- "mere paas 1 crore hai" → max_budget_cr: 1.0                  ✓
+- If no budget mentioned at all → both null. NEVER infer or guess budget.
+
+━━━ LOCATION RULES ━━━
+Generic: "near metro/hospital/school/park/market" → nearby list, named_landmark = null
+Specific named place: "near CMS school", "near Charbagh station", "near Phoenix mall" → named_landmark = that name, nearby = []
+"within 2 km of X" → named_landmark_max_km: 2.0
+
+━━━ LEAD INTENT RULES (critical — read carefully) ━━━
+
+"none" = just SEARCHING for a property (most messages)
+  Examples: "I need/want/am looking for a flat", "show me 3 BHK", "do you have anything in Aliganj", "what is available", "tell me about properties"
+  ⚠️ "I need a flat" = none (they want to FIND one, not act on one)
+
+"soft" = has SEEN options and shows mild personal interest (but not asking to act)
+  Examples: "this looks good/nice", "I like this one", "sounds promising yaar", "tell me more about property 2", "is this negotiable?"
+
+"strong" = clearly ready to TAKE ACTION right now
+  Examples: "I want to VISIT", "book a site visit", "can I SEE this flat?", "give me the broker's number", "schedule a visit for me", "I'll take this", "how do I book?", "connect me with the broker", "I'm ready to proceed"
+  ⚠️ "I'm interested" alone = soft, NOT strong
+  ⚠️ "I want a flat" = none (searching), "I want to VISIT a flat" = strong (acting)
 
 User message: {message}
 
-Conversation history (last few messages for context):
+Conversation history (for context — do NOT extract requirements from this, only from the message above):
 {history}"""
 
 # ── Property recommendation ───────────────────────────────────────────────────

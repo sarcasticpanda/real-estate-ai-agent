@@ -96,9 +96,36 @@ def _route(conv: ConversationManager, user_message: str) -> str:
     return reply
 
 
+def _build_search_query(requirements: dict, user_message: str) -> str:
+    """
+    Build a property-focused search query from requirements.
+    Avoids using short conversational messages (e.g. 'the second one looks nice')
+    as the embedding query since they have low similarity to property text.
+    """
+    parts = []
+    if requirements.get("bhk"):
+        parts.append(f"{requirements['bhk']} BHK")
+    if requirements.get("property_type"):
+        parts.append(requirements["property_type"])
+    if requirements.get("area"):
+        parts.append(f"in {requirements['area']}")
+    if requirements.get("city"):
+        parts.append(requirements["city"])
+    if requirements.get("max_budget_cr"):
+        parts.append(f"under {requirements['max_budget_cr']} crore")
+    if requirements.get("nearby"):
+        parts.append(f"near {' '.join(requirements['nearby'])}")
+    if requirements.get("amenities"):
+        parts.append(f"with {' '.join(requirements['amenities'][:3])}")
+    # Fall back to user message only if no requirements built
+    return " ".join(parts) if parts else user_message
+
+
 def _recommend(conv: ConversationManager, user_message: str, lead_level: str) -> str:
     """Run retrieval and generate recommendation. Append soft nudge if appropriate."""
-    properties = retrieve(user_message, conv.requirements, top_k=5)
+    # Use requirements-based query so short conversational messages don't hurt similarity
+    search_query = _build_search_query(conv.requirements, user_message)
+    properties = retrieve(search_query, conv.requirements, top_k=5)
 
     if properties:
         props_text = format_properties_for_llm(properties)

@@ -50,16 +50,30 @@ def retrieve(
     max_price = int(requirements["max_budget_cr"] * CRORE) if requirements.get("max_budget_cr") else None
     min_price = int(requirements["min_budget_cr"] * CRORE) if requirements.get("min_budget_cr") else None
 
+    # Normalize city: if it's a Lucknow neighbourhood, treat as city=Lucknow
+    city = requirements.get("city", "Lucknow") or "Lucknow"
+    if city.lower() != "lucknow":
+        logger.info(f"City normalized: '{city}' → 'Lucknow'")
+        city = "Lucknow"
+
+    # Normalize area: "Gomti Nagar" → "Gomtinagar" so ILIKE matches "Gomtinagar Extension"
+    area = requirements.get("area")
+    if area:
+        area_no_space = area.replace(" ", "")
+        area = area_no_space  # e.g. "GomtiNagar" — but lower + ILIKE handles case
+
+    logger.info(f"Retrieve: city={city} area={area} bhk={requirements.get('bhk')} max_price={max_price}")
+
     # Fetch more candidates than needed so we can re-rank
     raw_results = search_properties(
         query_embedding=query_embedding,
         match_threshold=match_threshold,
         match_count=top_k * 4,
-        filter_city=requirements.get("city", "Lucknow"),
+        filter_city=city,
         filter_max_price=max_price,
         filter_min_price=min_price,
         filter_bhk=requirements.get("bhk"),
-        filter_area=requirements.get("area"),
+        filter_area=area,
     )
 
     logger.info(f"Vector search: {len(raw_results)} candidates")
@@ -71,7 +85,7 @@ def retrieve(
             query_embedding=query_embedding,
             match_threshold=match_threshold * 0.6,
             match_count=top_k * 3,
-            filter_city=requirements.get("city", "Lucknow"),
+            filter_city=city,
             filter_max_price=max_price,
         )
 

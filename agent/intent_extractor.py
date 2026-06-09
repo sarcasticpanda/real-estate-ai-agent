@@ -4,6 +4,7 @@ buyer requirements from a natural language message.
 """
 
 import os
+import re
 import json
 import logging
 from groq import Groq
@@ -53,7 +54,9 @@ def extract_intent(message: str, conversation_history: list[dict] | None = None)
         raw = response.choices[0].message.content.strip()
         extracted = json.loads(raw)
         logger.info(f"Extracted intent: {extracted}")
-        return _normalise(extracted)
+        result = _normalise(extracted)
+        result = _postprocess(result, message)
+        return result
 
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Intent extraction failed: {e} — returning empty requirements")
@@ -79,6 +82,79 @@ def merge_requirements(existing: dict, new_extraction: dict) -> dict:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
+_UPPER_LIMIT_KEYWORDS = re.compile(
+    r"\b(under|below|within|up to|upto|not more than|max|maximum|budget hai|budget|mere paas|cost|worth)\b",
+    re.IGNORECASE,
+)
+_LOWER_LIMIT_KEYWORDS = re.compile(
+    r"\b(above|at least|minimum|min|starting from|more than|atleast)\b",
+    re.IGNORECASE,
+)
+_IN_AREA_RE = re.compile(
+    r"\b(?:in|at|near|around)\s+([A-Z][a-zA-Z ]{2,25}?)(?:\s+(?:under|above|below|near|with|for|\d)|$)",
+    re.IGNORECASE,
+)
+
+# Known Lucknow area names (lowercase for comparison)
+_LUCKNOW_AREAS = {
+    "gomti nagar", "gomtinagar", "gomti nagar extension", "gomtinagar extension",
+    "aliganj", "indira nagar", "indiranagar", "hazratganj", "ashiana",
+    "alambagh", "chowk", "aminabad", "mahanagar", "raj bhavan road",
+    "thakurganj", "kapoorthala", "vikas nagar", "jankipuram",
+    "kursi road", "faizabad road", "sultanpur road", "rae bareli road",
+    "chinhat", "sarojini nagar", "transport nagar", "vrindavan yojna",
+    "sushant golf city", "kalyanpur",
+}
+
+
+def _postprocess(result: dict, original_message: str) -> dict:
+    """Python-side guardrails for common LLM extraction mistakes."""
+    msg_lower = original_message.lower()
+
+    # ── Fix city/area confusion ──────────────────────────────────────────────
+    # LLM sometimes puts a neighbourhood (e.g. "Gomti Nagar") in city instead of area
+    city = result.get("city", "")
+    if city and city.lower() in _LUCKNOW_AREAS and city.lower() != "lucknow":
+        if not result.get("area"):
+            result["area"] = city.title()
+        result["city"] = "Lucknow"
+        logger.info(f"[postprocess] city '{city}' is a Lucknow area — moved to area, city=Lucknow")
+
+    # ── Fix budget direction ─────────────────────────────────────────────────
+    # If LLM put budget in min but the message says "under/below/within/budget X"
+    min_cr = result.get("min_budget_cr")
+    max_cr = result.get("max_budget_cr")
+
+    if min_cr is not None and max_cr is None:
+        if _UPPER_LIMIT_KEYWORDS.search(msg_lower):
+            # Swap: this is actually an upper limit
+            result["max_budget_cr"] = min_cr
+            result["min_budget_cr"] = None
+            logger.info(f"[postprocess] Budget direction corrected: min→max ({min_cr})")
+
+    if max_cr is not None and min_cr is None:
+        if _LOWER_LIMIT_KEYWORDS.search(msg_lower) and not _UPPER_LIMIT_KEYWORDS.search(msg_lower):
+            # Swap: this is actually a lower limit
+            result["min_budget_cr"] = max_cr
+            result["max_budget_cr"] = None
+            logger.info(f"[postprocess] Budget direction corrected: max→min ({max_cr})")
+
+    # ── Fix missing area ─────────────────────────────────────────────────────
+    if not result.get("area"):
+        # Try regex "in/at/near [Area Name]"
+        m = _IN_AREA_RE.search(original_message)
+        if m:
+            candidate = m.group(1).strip().lower()
+            # Check if it resembles a known Lucknow area (fuzzy: any known area keyword)
+            for known in _LUCKNOW_AREAS:
+                if candidate in known or known in candidate or known.split()[0] in candidate:
+                    result["area"] = m.group(1).strip().title()
+                    logger.info(f"[postprocess] Area rescued: '{result['area']}'")
+                    break
+
+    return result
+
 
 def _normalise(extracted: dict) -> dict:
     """Sanitise and fill defaults on raw Groq output."""
