@@ -44,3 +44,8 @@ python-multipart>=0.0.9   # needed for FastAPI file uploads
 
 # ── Telegram bot (optional — needed only if using Telegram interface) ─────────
 python-telegram-bot>=21.0
+
+# ── Google Calendar integration (optional — free API) ────────────────────────
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0

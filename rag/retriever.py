@@ -189,8 +189,12 @@ def format_properties_for_llm(properties: list[dict]) -> str:
         if landmark_dist is not None and landmark_name:
             conn_parts.insert(0, f"{landmark_name}: {landmark_dist} km")
 
+        images = data.get("images") or []
+        image_line = f"  Photos: {', '.join(images[:3])}\n" if images else ""
+
         lines.append(
             f"Property {i}:\n"
+            f"  ID: {r.get('id', '')}\n"
             f"  Type: {profile.get('bhk')} BHK {profile.get('property_type')}\n"
             f"  Location: {location.get('area_name')}, {location.get('city')}\n"
             f"  Price: {price_str}\n"
@@ -199,6 +203,7 @@ def format_properties_for_llm(properties: list[dict]) -> str:
             f"  Furnishing: {profile.get('furnishing')}\n"
             f"  Amenities: {', '.join(amenities[:8])}\n"
             f"  Nearby: {', '.join(conn_parts) or 'N/A'}\n"
+            f"{image_line}"
             f"  Match Score: {r.get('score', 0):.1f}/100\n"
         )
     return "\n".join(lines)

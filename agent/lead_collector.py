@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from database.supabase_client import save_lead, get_broker_for_area
+from notifications.email_notifier import notify_broker_email, notify_buyer_email
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +76,35 @@ def create_lead(
     try:
         saved = save_lead(lead_data)
         logger.info(f"Lead saved: {saved.get('id')} — {name} ({phone})")
+
+        # Send email notifications (fire-and-forget — failures don't block the flow)
+        _send_lead_emails(saved, requirements, broker, name, phone)
+
         return saved
     except Exception as e:
         logger.error(f"Failed to save lead: {e}")
         return None
+
+
+def _send_lead_emails(lead: dict, requirements: dict, broker: dict | None, name: str, phone: str) -> None:
+    """Send broker alert + buyer confirmation emails asynchronously."""
+    try:
+        broker_email = broker.get("email") if broker else None
+        notify_broker_email(lead, requirements, broker_email)
+    except Exception as e:
+        logger.warning(f"Broker email failed: {e}")
+
+    # Buyer email only if they provided one (rare in chat — future enhancement)
+    buyer_email = requirements.get("email")
+    if buyer_email:
+        try:
+            broker_name = broker.get("name", "our broker") if broker else "our broker"
+            broker_phone = broker.get("phone", "") if broker else ""
+            area = requirements.get("area", "Lucknow")
+            bhk = requirements.get("bhk", "")
+            notify_buyer_email(buyer_email, name, broker_name, broker_phone, area, bhk)
+        except Exception as e:
+            logger.warning(f"Buyer email failed: {e}")
 
 
 def notify_broker_via_n8n(lead: dict, requirements: dict, n8n_webhook_url: str | None = None) -> bool:

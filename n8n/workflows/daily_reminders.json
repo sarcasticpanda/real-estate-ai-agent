@@ -1,0 +1,96 @@
+{
+  "name": "Daily Visit Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Daily 9AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8000/meetings/upcoming",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "hours_ahead", "value": "24" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-meetings",
+      "name": "Fetch Upcoming Meetings",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "meetings",
+        "options": {}
+      },
+      "id": "split-meetings",
+      "name": "Split Meetings",
+      "type": "n8n-nodes-base.splitOut",
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.brokers.telegram_chat_id }}",
+        "text": "=🔔 *Visit Reminder — Tomorrow*\n\n👤 Customer: {{ $json.leads.name }}\n📞 Phone: {{ $json.leads.phone }}\n🏠 Property: {{ $json.property_id }}\n📅 Scheduled: {{ $json.scheduled_at }}\n\nPlease confirm you're available. Reply with /confirm_{{ $json.id }} or /reschedule_{{ $json.id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "remind-broker",
+      "name": "Remind Broker",
+      "type": "n8n-nodes-base.telegram",
+      "position": [960, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 9AM Trigger": {
+      "main": [
+        [
+          { "node": "Fetch Upcoming Meetings", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Upcoming Meetings": {
+      "main": [
+        [
+          { "node": "Split Meetings", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Split Meetings": {
+      "main": [
+        [
+          { "node": "Remind Broker", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Runs every morning at 9AM IST. Fetches meetings scheduled for the next 24 hours and sends Telegram reminders to brokers."
+  }
+}

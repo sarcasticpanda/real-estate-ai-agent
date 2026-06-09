@@ -1,0 +1,96 @@
+{
+  "name": "Meeting Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "schedule-meeting",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-schedule",
+      "name": "Schedule Meeting Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "webhookId": "schedule-meeting"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/webhook/n8n/meeting",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "create-meeting",
+      "name": "Create Meeting + Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Schedule Meeting Webhook').item.json.broker_telegram_chat_id }}",
+        "text": "=✅ *Meeting Confirmed!*\n\n👤 Customer: {{ $('Schedule Meeting Webhook').item.json.buyer_name }}\n📞 Phone: {{ $('Schedule Meeting Webhook').item.json.buyer_phone }}\n🏠 Property: {{ $('Schedule Meeting Webhook').item.json.property_area }}\n📅 Time: {{ $('Schedule Meeting Webhook').item.json.scheduled_at }}\n⏱️ Duration: {{ $('Schedule Meeting Webhook').item.json.duration_minutes || 60 }} min\n\n{{ $json.calendar_link ? '📆 Calendar: ' + $json.calendar_link : '' }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-confirm-broker",
+      "name": "Confirm to Broker",
+      "type": "n8n-nodes-base.telegram",
+      "position": [720, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "respond-schedule",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Schedule Meeting Webhook": {
+      "main": [
+        [
+          { "node": "Create Meeting + Calendar", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create Meeting + Calendar": {
+      "main": [
+        [
+          { "node": "Confirm to Broker", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Confirm to Broker": {
+      "main": [
+        [
+          { "node": "Respond", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Schedules a property visit: creates meeting record, Google Calendar event, and sends broker confirmation."
+  }
+}

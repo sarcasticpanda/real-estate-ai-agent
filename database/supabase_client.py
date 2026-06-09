@@ -165,3 +165,64 @@ def get_broker_for_area(area_name: str) -> dict | None:
 def get_all_brokers() -> list[dict]:
     client = get_client()
     return client.table("brokers").select("*").eq("is_active", True).execute().data or []
+
+
+# ── Property Images (Supabase Storage) ───────────────────────────────────────
+
+IMAGES_BUCKET = "property-images"
+
+
+def upload_property_image(property_id: str, filename: str, file_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
+    """
+    Upload image bytes to Supabase Storage.
+    Returns the public URL or None on failure.
+    Bucket 'property-images' must exist and be set to public in Supabase dashboard.
+    """
+    client = get_client()
+    storage_path = f"{property_id}/{filename}"
+
+    try:
+        client.storage.from_(IMAGES_BUCKET).upload(
+            path=storage_path,
+            file=file_bytes,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+        public_url = client.storage.from_(IMAGES_BUCKET).get_public_url(storage_path)
+        logger.info(f"Image uploaded: {storage_path} → {public_url}")
+        return public_url
+    except Exception as e:
+        logger.error(f"Image upload failed for {storage_path}: {e}")
+        return None
+
+
+def add_image_url_to_property(property_id: str, image_url: str) -> bool:
+    """Append image URL to the property's data.images list."""
+    client = get_client()
+    try:
+        result = client.table("properties").select("data").eq("id", property_id).execute()
+        if not result.data:
+            return False
+
+        data = result.data[0]["data"]
+        images = data.get("images") or []
+        if image_url not in images:
+            images.append(image_url)
+            data["images"] = images
+            client.table("properties").update({"data": data}).eq("id", property_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to add image URL to property {property_id}: {e}")
+        return False
+
+
+def get_property_images(property_id: str) -> list[str]:
+    """Return the list of image URLs for a property."""
+    client = get_client()
+    result = client.table("properties").select("data").eq("id", property_id).execute()
+    if not result.data:
+        return []
+    return result.data[0]["data"].get("images") or []
+
+
+import logging
+logger = logging.getLogger(__name__)

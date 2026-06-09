@@ -1,0 +1,110 @@
+{
+  "name": "Lead Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-notification",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "webhookId": "lead-notification"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.broker_telegram_chat_id }}",
+        "text": "=🏠 *New Lead Alert!*\n\n👤 *Customer:* {{ $json.customer_name }}\n📞 *Phone:* {{ $json.customer_phone }}\n🏘️ *Looking for:* {{ $json.preferred_bhk }} BHK in {{ $json.preferred_area }}\n💰 *Budget:* {{ $json.max_budget_cr ? $json.max_budget_cr + ' crore' : 'Not specified' }}\n\n⚡ Please call within 2 hours!\n\nLead ID: {{ $json.lead_id }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-broker",
+      "name": "Telegram Broker Alert",
+      "type": "n8n-nodes-base.telegram",
+      "position": [480, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/webhook/n8n/lead",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "lead_id",
+              "value": "={{ $json.lead_id }}"
+            },
+            {
+              "name": "status",
+              "value": "notified"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-lead-status",
+      "name": "Update Lead Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          { "node": "Telegram Broker Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Telegram Broker Alert": {
+      "main": [
+        [
+          { "node": "Update Lead Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update Lead Status": {
+      "main": [
+        [
+          { "node": "Respond to Webhook", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "description": "Triggered when a new lead is captured. Sends Telegram alert to broker and updates lead status.",
+    "n8n_version": "1.0"
+  }
+}
