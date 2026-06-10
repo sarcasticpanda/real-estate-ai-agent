@@ -31,17 +31,19 @@ def _compute_score(result: dict, req: dict) -> float:
     similarity = result.get("similarity", 0.0)
 
     weights = {
-        "similarity": 40,
+        "similarity": 35,
         "budget": 25,
-        "bhk": 15,
+        "bhk": 10,
+        "type": 15,
         "location": 10,
-        "amenities": 10,
+        "amenities": 5,
     }
 
     scores = {
         "similarity": similarity * 100,
         "budget": _budget_score(data, req),
         "bhk": _bhk_score(data, req),
+        "type": _type_score(data, req),
         "location": _location_score(data, req),
         "amenities": _amenity_score(data, req),
     }
@@ -80,6 +82,25 @@ def _bhk_score(data: dict, req: dict) -> float:
         return 50.0
     diff = abs(prop_bhk - req_bhk)
     return max(0, 100 - diff * 30)
+
+
+def _type_score(data: dict, req: dict) -> float:
+    req_type = (req.get("property_type") or "").lower().strip()
+    if not req_type:
+        return 100.0
+    prop_type = ((data.get("property_profile") or {}).get("property_type") or "").lower().strip()
+    if not prop_type:
+        return 50.0
+    if req_type == prop_type:
+        return 100.0
+    # Villa/house/bungalow are close relatives
+    villa_group = {"villa", "house", "bungalow", "independent house", "independent"}
+    flat_group = {"flat", "apartment"}
+    if req_type in villa_group and prop_type in villa_group:
+        return 75.0
+    if req_type in flat_group and prop_type in flat_group:
+        return 75.0
+    return 15.0  # wrong category — heavy penalty to push non-matching types to the back
 
 
 def _location_score(data: dict, req: dict) -> float:

@@ -3,12 +3,17 @@ Main agent loop. Handles one user message and returns Riya's reply.
 
 Lead capture flow:
   "none"   — just search and recommend
-  "soft"   — show properties + gently nudge ("want me to set up a visit?")
-  "strong" — move to lead_capture stage → collect name + phone
-  Auto-nudge after 2+ recommendation turns with no action
+  "soft"   — show properties + track which property interested them
+  "strong" — move to lead_capture stage -> collect name + phone
+  Auto-nudge after 3+ recommendation turns with no action
+
+Web onboarding:
+  New web sessions collect name -> phone before property search, same as Telegram.
+  Stored in session requirements._profile with onboarding_step tracking.
 """
 
 import os
+import re
 import logging
 import sys
 from pathlib import Path
@@ -25,7 +30,8 @@ from agent.intent_extractor import extract_intent, merge_requirements
 from agent.lead_collector import extract_name_and_phone, create_lead, notify_broker_via_n8n
 from rag.retriever import retrieve, format_properties_for_llm
 from rag.prompts import (
-    SYSTEM_PROMPT, PROPERTY_RECOMMENDATION_PROMPT, LEAD_CAPTURE_PROMPT,
+    SYSTEM_PROMPT, SYSTEM_PROMPT_NAMED,
+    PROPERTY_RECOMMENDATION_PROMPT, LEAD_CAPTURE_PROMPT,
     NO_RESULTS_PROMPT, SOFT_INTEREST_PROMPT, CLARIFY_PROMPT,
     LEAD_SAVED_TEMPLATE,
 )
@@ -33,8 +39,62 @@ from rag.prompts import (
 logger = logging.getLogger(__name__)
 
 GROQ_MODEL = "llama-3.1-8b-instant"
-# Automatically nudge toward lead capture after this many recommendation turns
-_AUTO_NUDGE_AFTER = 2
+_AUTO_NUDGE_AFTER = 3
+
+# Words that are NOT valid names
+_NOT_A_NAME = {
+    "hello", "hi", "hey", "hii", "hiii", "namaste", "yo", "yes", "no", "ok",
+    "okay", "sup", "start", "none", "test", "bot", "riya", "agent", "help",
+    "nope", "yep", "nah", "yeah", "sure", "fine", "good", "great", "nice",
+    "skip", "s", "next", "done", "begin", "go", "search",
+}
+_PHONE_RE = re.compile(r'^(?:\+91[-\s]?)?[6-9]\d{9}$')
+
+# Keywords signalling a property search (used for lead_capture escape hatch)
+_SEARCH_RE = re.compile(
+    r"\b(show|properties|flats?|houses?|apartments?|bhk|budget|area|lakh|crore|crores|"
+    r"available|search|find|looking|options|listings?|rooms?|bedroom|furnish)\b",
+    re.IGNORECASE,
+)
+
+# Keywords signalling shortlist intent
+_SHORTLIST_RE = re.compile(
+    r"\b(shortlist|saved?|favorites?|liked|my properties|show saved|bookmark)\b",
+    re.IGNORECASE,
+)
+
+# "show more / other options" — exclude already-shown properties
+_MORE_OPTIONS_RE = re.compile(
+    r"\b(more options|more properties|show more|other options|different options|"
+    r"anything else|what else|more listings|see more|more results|any other|"
+    r"more choices|other properties|something else|different properties)\b",
+    re.IGNORECASE,
+)
+
+# "more areas / different location" — clear area filter so all of Lucknow is searched
+_DIFF_AREA_RE = re.compile(
+    r"\b(more areas?|other areas?|different areas?|another area|different location|"
+    r"other locations?|change area|somewhere else|other parts?|any areas?|"
+    r"broader search|anywhere in lucknow|expand search|all areas?|"
+    r"across lucknow|whole lucknow|entire lucknow)\b",
+    re.IGNORECASE,
+)
+
+# "remove budget" / "no budget limit" — clear budget filters
+_CLEAR_BUDGET_RE = re.compile(
+    r"\b(remove.{0,10}budget|no budget|any budget|any price|ignore budget|"
+    r"without budget|price.{0,10}(doesn'?t matter|not important|don'?t care)|"
+    r"budget.{0,10}(doesn'?t matter|not important|remove|ignore)|any amount|no limit)\b",
+    re.IGNORECASE,
+)
+
+# "any BHK" / "doesn't matter" — clear BHK + property_type filters
+_ANY_BHK_RE = re.compile(
+    r"\b(any bhk|any type|not.{0,8}(specific|particular).{0,8}bhk|bhk.{0,10}doesn'?t matter|"
+    r"any flat|any house|any property|any configuration|don'?t care.{0,10}bhk|"
+    r"not.{0,5}(2|3|4) bhk|whatever type|any size)\b",
+    re.IGNORECASE,
+)
 
 
 def _groq_client() -> Groq:
@@ -55,154 +115,494 @@ def _llm(messages: list[dict], temperature: float = 0.7, max_tokens: int = 700) 
     return resp.choices[0].message.content.strip()
 
 
-def process_message(session_id: str, user_message: str, platform: str = "web") -> str:
+def _sys(user_name: str | None = None) -> str:
+    if user_name:
+        return SYSTEM_PROMPT_NAMED.format(name=user_name)
+    return SYSTEM_PROMPT
+
+
+def _get_user_name(conv: ConversationManager) -> str | None:
+    return (conv.requirements.get("_profile") or {}).get("name")
+
+
+# ── Web onboarding (name + phone, same flow as Telegram) ─────────────────────
+
+def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict | None:
     """
-    Process one user message and return Riya's reply.
-    Single entry point for Telegram bot, web chat, API.
+    For web platform: collect name then phone before property search.
+    Returns response dict if still in onboarding (or for __init__ reload),
+    otherwise None so normal routing continues.
+
+    NOTE: messages handled here are NOT added to conversation history so they
+    don't confuse the intent extractor (phone number in history → wrong "strong" intent).
+    """
+    profile = conv.requirements.get("_profile") or {}
+    step = profile.get("onboarding_step")
+
+    # Auto-init: page load / reload — handle here so __init__ never hits intent extractor
+    if user_message == "__init__":
+        if step == "complete":
+            name = profile.get("name")
+            if name:
+                return {"reply": f"Welcome back, {name}! What are you looking for today?", "properties": []}
+            return {"reply": "Hello! I'm Riya, your property consultant for Lucknow. What are you looking for?", "properties": []}
+        # Not yet onboarded — fall through to start onboarding
+        step = None
+
+    if step == "complete":
+        return None  # done, proceed to normal routing
+
+    text = user_message.strip()
+
+    # First message — start onboarding
+    if not step:
+        profile["onboarding_step"] = "waiting_name"
+        conv.requirements["_profile"] = profile
+        return {"reply": "Before we start, what should I call you?", "properties": []}
+
+    # Waiting for name
+    if step == "waiting_name":
+        alpha = sum(1 for c in text if c.isalpha())
+        has_digits = any(c.isdigit() for c in text)
+        if alpha >= 2 and not has_digits and text.lower() not in _NOT_A_NAME:
+            name = text.title()
+            profile["name"] = name
+            profile["onboarding_step"] = "waiting_phone"
+            conv.requirements["_profile"] = profile
+            return {
+                "reply": (
+                    f"Nice to meet you, {name}! Could I get your contact number? "
+                    "I'll only use it when you're ready to schedule a visit. "
+                    "(Type _skip_ to skip)"
+                ),
+                "properties": [],
+            }
+        return {"reply": "Please enter your name to get started.", "properties": []}
+
+    # Waiting for phone
+    if step == "waiting_phone":
+        if text.lower() in ("skip", "s", "no", "nope", "later", "next"):
+            profile["onboarding_step"] = "complete"
+            conv.requirements["_profile"] = profile
+            name = profile.get("name", "")
+            return {
+                "reply": (
+                    f"No problem, {name}! So, what kind of property are you looking for? "
+                    "Tell me your budget and I'll get started."
+                ),
+                "properties": [],
+            }
+        cleaned = re.sub(r"[\s\-()]", "", text)
+        if _PHONE_RE.match(cleaned) or re.match(r"^[6-9]\d{9}$", cleaned):
+            phone = cleaned.lstrip("+91").lstrip("91") if len(cleaned) > 10 else cleaned
+            profile["phone"] = phone
+            profile["onboarding_step"] = "complete"
+            conv.requirements["_profile"] = profile
+            name = profile.get("name", "")
+            return {
+                "reply": (
+                    f"Got it, {name}! Now what kind of property are you looking for? "
+                    "Tell me your budget and I'll get started."
+                ),
+                "properties": [],
+            }
+        return {
+            "reply": "Please enter a valid 10-digit Indian mobile number, or type _skip_.",
+            "properties": [],
+        }
+
+    return None
+
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+def process_message(session_id: str, user_message: str, platform: str = "web") -> dict:
+    """
+    Process one user message.
+    Returns {"reply": str, "properties": list[dict]}.
+
+    Web onboarding messages (name/phone) are intentionally NOT added to chat history
+    so they don't confuse the LLM intent extractor (e.g. a phone number in history
+    should not trigger lead_intent = "strong").
     """
     conv = ConversationManager(session_id, platform)
     conv.load()
+
+    # Web onboarding: handle BEFORE adding to history
+    if platform == "web":
+        onboarding_result = _handle_web_onboarding(conv, user_message)
+        if onboarding_result is not None:
+            conv.save()
+            return onboarding_result
+
+    # Normal conversation — add to history and route
     conv.add_user_message(user_message)
-
-    reply = _route(conv, user_message)
-
+    reply, properties = _route(conv, user_message)
     conv.add_assistant_message(reply)
     conv.save()
-    return reply
+    return {"reply": reply, "properties": properties}
 
 
-def _route(conv: ConversationManager, user_message: str) -> str:
+_NOISE_RE = re.compile(r"^[\W\d\s]{1,4}$")
+
+
+def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
+    user_name = _get_user_name(conv)
+
+    # ── Shortlist request ─────────────────────────────────────────────────────
+    if _SHORTLIST_RE.search(user_message):
+        return _show_shortlist(conv, user_name)
+
     # ── Stage: collecting name + phone ───────────────────────────────────────
     if conv.is_lead_capture_stage():
-        return _handle_lead_capture(conv, user_message)
+        if _SEARCH_RE.search(user_message):
+            conv.set_stage("discovery")  # escape hatch
+        else:
+            return _handle_lead_capture(conv, user_message, user_name), []
+
+    # ── After completed lead, allow new search (post_lead cooldown) ──────────
+    if conv.stage in ("done", "post_lead"):
+        remaining = conv.requirements.get("_post_lead_turns", 0)
+        if remaining > 0:
+            conv.requirements["_post_lead_turns"] = remaining - 1
+        else:
+            conv.set_stage("discovery")
+
+    # ── Guard: ignore very short/noise messages mid-conversation ─────────────
+    stripped = user_message.strip()
+    if _NOISE_RE.match(stripped) and conv.stage == "recommending":
+        return "Did any of those properties interest you? Let me know if you'd like details on any of them.", []
+
+    # ── Detect filter-modifying intents before extraction ────────────────────
+    is_more_request = bool(_MORE_OPTIONS_RE.search(user_message))
+    is_diff_area    = bool(_DIFF_AREA_RE.search(user_message))
+    clear_budget    = bool(_CLEAR_BUDGET_RE.search(user_message))
+    clear_bhk       = bool(_ANY_BHK_RE.search(user_message))
+
+    # Set sticky-clear flags BEFORE merge so merge doesn't overwrite them
+    if is_diff_area:
+        conv.requirements["area"] = None
+        conv.requirements["_area_cleared"] = True
+    if clear_budget:
+        conv.requirements["max_budget_cr"] = None
+        conv.requirements["min_budget_cr"] = None
+        conv.requirements["_budget_cleared"] = True
+    if clear_bhk:
+        conv.requirements["bhk"] = None
+        conv.requirements["property_type"] = None
+        conv.requirements["_bhk_cleared"] = True
+
+    # When user changes search params, reset nudge counter so they see fresh results
+    if clear_budget or clear_bhk or is_diff_area:
+        conv._recommendation_count = 0
 
     # ── Extract intent ────────────────────────────────────────────────────────
     extracted = extract_intent(user_message, conv.get_history_for_llm())
     conv.requirements = merge_requirements(conv.requirements, extracted)
     lead_level = extracted.get("lead_intent_level", "none")
 
-    # ── Strong intent → move to lead capture ─────────────────────────────────
+    # ── Sticky-clear enforcement ──────────────────────────────────────────────
+    # The intent extractor sees full chat history and may re-extract values the user
+    # intentionally cleared. Locks are lifted ONLY when the CURRENT message explicitly
+    # contains the relevant keyword — not just because LLaMA saw it in history.
+
+    _budget_kw = re.compile(r'\b\d[\d,]*\s*(lakh|lac|lakhs|lacs|crore|cr|crores)\b', re.IGNORECASE)
+    _bhk_kw    = re.compile(r'\b(\d\s*bhk|bhk\s*\d|flat|house|villa|apartment|bungalow|plot)\b', re.IGNORECASE)
+
+    if is_diff_area:
+        conv.requirements["area"] = None  # force even if LLM re-extracted from history
+    elif conv.requirements.get("_area_cleared"):
+        new_area = extracted.get("area")
+        if new_area and new_area.lower().replace(" ", "") in user_message.lower().replace(" ", ""):
+            conv.requirements["_area_cleared"] = False  # user named a real area in this message
+        else:
+            conv.requirements["area"] = None  # keep cleared (history-based re-extraction)
+
+    if clear_budget:
+        conv.requirements["max_budget_cr"] = None
+        conv.requirements["min_budget_cr"] = None
+    elif conv.requirements.get("_budget_cleared"):
+        new_budget = extracted.get("max_budget_cr") or extracted.get("min_budget_cr")
+        if new_budget and _budget_kw.search(user_message):
+            conv.requirements["_budget_cleared"] = False  # user gave explicit new budget
+        else:
+            conv.requirements["max_budget_cr"] = None
+            conv.requirements["min_budget_cr"] = None
+
+    if clear_bhk:
+        conv.requirements["bhk"] = None
+        conv.requirements["property_type"] = None
+    elif conv.requirements.get("_bhk_cleared"):
+        new_bhk = extracted.get("bhk")
+        new_type = extracted.get("property_type")
+        if (new_bhk or new_type) and _bhk_kw.search(user_message):
+            conv.requirements["_bhk_cleared"] = False  # user explicitly named a type/BHK
+        else:
+            conv.requirements["bhk"] = None
+            conv.requirements["property_type"] = None
+
+    # ── Strong intent -> move to lead capture ─────────────────────────────────
     if lead_level == "strong":
         conv.set_stage("lead_capture")
-        return _ask_for_contact(conv)
+        return _ask_for_contact(conv, user_name), []
 
-    # ── Search + recommend ────────────────────────────────────────────────────
-    if conv.has_enough_info():
+    # ── "More options" while in recommending stage → exclude already-shown ───
+    if is_more_request and conv.stage == "recommending":
+        return _recommend(conv, user_message, lead_level, user_name, is_more_request=True)
+
+    # ── Decide whether to search or keep clarifying ───────────────────────────
+    budget_cleared = conv.requirements.get("_budget_cleared", False)
+    bhk_cleared    = conv.requirements.get("_bhk_cleared", False)
+    has_area       = bool(conv.requirements.get("area"))
+    has_bhk_or_type = bool(conv.requirements.get("bhk") or conv.requirements.get("property_type"))
+
+    # Allow search when: (budget + area + bhk/type) OR (area + bhk/type + no-budget-flag)
+    can_search = conv.has_enough_info() or (
+        has_area and (has_bhk_or_type or bhk_cleared) and (conv.requirements.get("max_budget_cr") or budget_cleared)
+    )
+
+    if can_search:
         conv.set_stage("recommending")
-        reply = _recommend(conv, user_message, lead_level)
+        return _recommend(conv, user_message, lead_level, user_name)
     else:
-        reply = _clarify(conv, user_message)
-
-    return reply
+        return _clarify(conv, user_message, user_name), []
 
 
 def _build_search_query(requirements: dict, user_message: str) -> str:
     """
-    Build a property-focused search query from requirements.
-    Avoids using short conversational messages (e.g. 'the second one looks nice')
-    as the embedding query since they have low similarity to property text.
+    Build a rich semantic query for pgvector cosine search.
+    Includes type synonyms so the embedding matches diverse property descriptions.
     """
     parts = []
-    if requirements.get("bhk"):
-        parts.append(f"{requirements['bhk']} BHK")
-    if requirements.get("property_type"):
-        parts.append(requirements["property_type"])
+    bhk = requirements.get("bhk")
+    ptype = requirements.get("property_type") or ""
+
+    type_syns = {
+        "flat": "flat apartment home",
+        "house": "house bungalow independent home",
+        "villa": "villa bungalow luxury home independent house",
+        "plot": "plot land open",
+        "shop": "shop commercial space",
+    }
+
+    if bhk:
+        syn = type_syns.get(ptype.lower(), "property home")
+        parts.append(f"{bhk} BHK {syn}")
+    elif ptype:
+        # type without BHK — still use full synonyms so vector matches well
+        syn = type_syns.get(ptype.lower(), ptype)
+        parts.append(syn)
+    else:
+        parts.append("residential property flat house apartment home")  # broad when no BHK/type
+
     if requirements.get("area"):
-        parts.append(f"in {requirements['area']}")
-    if requirements.get("city"):
-        parts.append(requirements["city"])
+        parts.append(f"in {requirements['area']} Lucknow")
+    elif requirements.get("city"):
+        parts.append(f"in {requirements['city']}")
+
     if requirements.get("max_budget_cr"):
-        parts.append(f"under {requirements['max_budget_cr']} crore")
+        cr = requirements["max_budget_cr"]
+        lakh = cr * 100
+        if lakh == int(lakh):
+            parts.append(f"affordable under {int(lakh)} lakh rupees")
+        else:
+            parts.append(f"under {cr:.2f} crore")
+
     if requirements.get("nearby"):
         parts.append(f"near {' '.join(requirements['nearby'])}")
+    if requirements.get("furnishing"):
+        parts.append(requirements["furnishing"])
     if requirements.get("amenities"):
         parts.append(f"with {' '.join(requirements['amenities'][:3])}")
-    # Fall back to user message only if no requirements built
+
     return " ".join(parts) if parts else user_message
 
 
-def _recommend(conv: ConversationManager, user_message: str, lead_level: str) -> str:
-    """Run retrieval and generate recommendation. Append soft nudge if appropriate."""
-    # Use requirements-based query so short conversational messages don't hurt similarity
+def _recommend(
+    conv: ConversationManager,
+    user_message: str,
+    lead_level: str,
+    user_name: str | None,
+    is_more_request: bool = False,
+) -> tuple[str, list]:
+    from rag.retriever import to_card
+
+    shown_ids: list = conv.requirements.get("_shown_ids") or []
+    # Only exclude already-shown IDs when user explicitly asks for MORE options.
+    # For any fresh "show me properties in X" request, always search clean.
+    exclude = shown_ids if is_more_request else []
+
     search_query = _build_search_query(conv.requirements, user_message)
-    properties = retrieve(search_query, conv.requirements, top_k=5)
+    req = conv.requirements
+    filter_note = ""  # will be injected into LLM prompt if we relaxed filters
+
+    properties = retrieve(search_query, req, top_k=5, exclude_ids=exclude)
+
+    # ── Progressive fallback when user insists on an area but no results ──────
+    area = req.get("area")
+    if not properties and area:
+        # Fallback 1: remove BHK + property_type, keep area + budget
+        req_f1 = {**req, "bhk": None, "property_type": None}
+        properties = retrieve(search_query, req_f1, top_k=5, exclude_ids=exclude)
+        if properties:
+            filter_note = f"(I widened the search to include all BHK types in {area})"
+
+    if not properties and area:
+        # Fallback 2: also remove budget, keep area only
+        req_f2 = {**req, "bhk": None, "property_type": None, "max_budget_cr": None, "min_budget_cr": None}
+        properties = retrieve(search_query, req_f2, top_k=5, exclude_ids=exclude)
+        if properties:
+            filter_note = f"(I've shown all available in {area} — some may be above your stated budget)"
+
+    # ── Detect area mismatch: retriever's internal fallback dropped the area filter ──
+    # When DB has no properties in the requested area, retrieve() silently returns
+    # results from other areas. Detect this and tell the LLM so it doesn't falsely
+    # claim "in Aliganj" while showing Hazratganj properties.
+    if area and properties and not filter_note:
+        req_area_norm = area.lower().replace(" ", "")
+        prop_areas = [(p.get("area") or "").lower().replace(" ", "") for p in properties]
+        any_match = any(req_area_norm in pa or pa in req_area_norm for pa in prop_areas)
+        if not any_match:
+            shown_areas = sorted(set((p.get("area") or "").title() for p in properties if p.get("area")))
+            alt_text = " and ".join(shown_areas[:2]) if shown_areas else "nearby areas"
+            filter_note = (
+                f"(No properties currently listed in {area} — showing best available options "
+                f"from {alt_text} instead; mention this honestly to the buyer)"
+            )
+
+    # ── "More options" exhausted — suggest alternatives ───────────────────────
+    if not properties and is_more_request:
+        return _suggest_alternatives(conv, user_name), []
 
     if properties:
+        new_ids = [p.get("id") for p in properties if p.get("id")]
+        conv.requirements["_shown_ids"] = list(dict.fromkeys(shown_ids + new_ids))
+
+        cards = [to_card(p) for p in properties]
         props_text = format_properties_for_llm(properties)
+        avail_note = f"\n⚠️ availability_note: {filter_note}\n" if filter_note else ""
         user_prompt = PROPERTY_RECOMMENDATION_PROMPT.format(
             count=len(properties),
-            requirements=_requirements_summary(conv.requirements),
+            requirements=_requirements_summary(req),
             properties_text=props_text,
+            availability_note=avail_note,
         )
     else:
-        user_prompt = NO_RESULTS_PROMPT.format(
-            requirements=_requirements_summary(conv.requirements)
-        )
+        cards = []
+        user_prompt = NO_RESULTS_PROMPT.format(requirements=_requirements_summary(req))
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({"role": "user", "content": user_prompt})
+    reply = _llm(messages, max_tokens=300)
 
-    reply = _llm(messages)
+    if lead_level == "soft" and properties:
+        conv.requirements["_liked_property_id"] = properties[0].get("id", "")
 
-    # Soft nudge: user showed mild interest OR already recommended twice with no action
     rec_count = conv.get_recommendation_count()
     should_nudge = (lead_level == "soft") or (rec_count >= _AUTO_NUDGE_AFTER and lead_level == "none")
-
     if should_nudge and properties:
         conv.increment_recommendation_count()
         nudge_prompt = SOFT_INTEREST_PROMPT.format(
-            context=_requirements_summary(conv.requirements),
+            context=_requirements_summary(req),
             message=user_message,
         )
-        nudge_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        nudge_messages = [{"role": "system", "content": _sys(user_name)}]
         nudge_messages.append({"role": "assistant", "content": reply})
         nudge_messages.append({"role": "user", "content": nudge_prompt})
-        reply = _llm(nudge_messages, temperature=0.5, max_tokens=200)
+        reply = _llm(nudge_messages, temperature=0.5, max_tokens=150)
     else:
         conv.increment_recommendation_count()
 
-    return reply
+    return reply, cards
 
 
-def _handle_lead_capture(conv: ConversationManager, user_message: str) -> str:
-    """Try to extract name + phone. Keep asking gently until we get both."""
+def _suggest_alternatives(conv: ConversationManager, user_name: str | None) -> str:
+    """
+    Called when user asks for more options but we've shown everything matching.
+    Suggests: different area, relaxed budget, different BHK.
+    """
+    r = conv.requirements
+    area = r.get("area", "this area")
+    budget_cr = r.get("max_budget_cr")
+    bhk = r.get("bhk")
+
+    # Build suggestions
+    suggestions = []
+    if area and area.lower() != "lucknow":
+        suggestions.append("explore a nearby area like Gomti Nagar, Aliganj, or Indiranagar")
+    if budget_cr:
+        stretched = round(budget_cr * 1.3, 2)
+        lakh = stretched * 100
+        budget_label = f"Rs.{int(lakh)} lakh" if lakh == int(lakh) else f"Rs.{stretched:.2f} crore"
+        suggestions.append(f"stretch the budget slightly to around {budget_label}")
+    if bhk and bhk > 1:
+        suggestions.append(f"consider {bhk - 1} BHK options which are more available")
+
+    if not suggestions:
+        suggestions = ["try a different area", "adjust the budget range"]
+
+    suggestion_text = ", or ".join(suggestions[:2])
+
+    name_part = f"{user_name}, " if user_name else ""
+    messages = [{"role": "system", "content": _sys(user_name)}]
+    messages.append({
+        "role": "user",
+        "content": (
+            f"The buyer ({name_part}searched: {_requirements_summary(r)}) has seen all available properties. "
+            f"As Riya, write 2 sentences: (1) acknowledge no new matches right now, "
+            f"(2) suggest ONE of: {suggestion_text}. "
+            "Professional English, warm and helpful."
+        ),
+    })
+    return _llm(messages, temperature=0.6, max_tokens=120)
+
+
+def _handle_lead_capture(
+    conv: ConversationManager,
+    user_message: str,
+    user_name: str | None,
+) -> str:
     name, phone = extract_name_and_phone(user_message)
 
     if name and phone:
+        liked_id = conv.requirements.get("_liked_property_id")
         lead = create_lead(
             session_id=conv.session_id,
             requirements=conv.requirements,
             name=name,
             phone=phone,
+            property_id=liked_id,
         )
         if lead:
             notify_broker_via_n8n(lead, conv.requirements)
-            conv.set_stage("done")
+            profile = conv.requirements.get("_profile") or {}
+            profile["name"] = name
+            profile["phone"] = phone
+            conv.requirements["_profile"] = profile
+            conv.set_stage("post_lead")
+            conv.requirements["_post_lead_turns"] = 3
             return LEAD_SAVED_TEMPLATE.format(name=name, phone=phone)
         else:
-            return "Oops, something went wrong on my end! Can you share your name and number once more?"
+            return "Apologies, something went wrong. Could you share your name and number once more?"
 
     if phone:
-        return "Got your number! Could you also share your name? The broker would love to know who they're calling 😊"
+        return "Got your number! Could you also share your name? Our consultant would like to address you properly."
 
-    # Nothing extracted — ask again warmly
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({
         "role": "user",
         "content": (
-            "The user wants to proceed but hasn't shared their name and phone yet. "
-            "Gently ask again in Riya's warm style — one casual sentence. "
-            "Remind them the broker will call them (not text) to schedule a visit."
+            "The buyer wants to proceed but hasn't shared their name and phone yet. "
+            "Gently ask again — one warm, professional sentence."
         ),
     })
     return _llm(messages, temperature=0.5, max_tokens=120)
 
 
-def _ask_for_contact(conv: ConversationManager) -> str:
-    """Generate the initial lead capture ask."""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+def _ask_for_contact(conv: ConversationManager, user_name: str | None) -> str:
+    messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({
         "role": "user",
@@ -213,27 +613,109 @@ def _ask_for_contact(conv: ConversationManager) -> str:
     return _llm(messages, temperature=0.5, max_tokens=150)
 
 
-def _clarify(conv: ConversationManager, user_message: str) -> str:
-    """Ask for the most important missing requirement."""
-    known_parts = []
+def _clarify(
+    conv: ConversationManager,
+    user_message: str,
+    user_name: str | None,
+) -> str:
+    """
+    Code determines WHAT to ask (guaranteed correct order).
+    LLM only handles phrasing — cannot ask the wrong thing.
+    """
     r = conv.requirements
-    if r.get("bhk"):
-        known_parts.append(f"{r['bhk']} BHK")
-    if r.get("area"):
-        known_parts.append(r["area"])
-    if r.get("max_budget_cr"):
-        known_parts.append(f"under {r['max_budget_cr']} crore")
+    has_budget = bool(r.get("max_budget_cr") or r.get("min_budget_cr"))
+    has_area = bool(r.get("area"))
+    has_bhk = bool(r.get("bhk"))
+    has_type = bool(r.get("property_type"))
+    budget_cleared = r.get("_budget_cleared", False)
+    bhk_cleared = r.get("_bhk_cleared", False)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Format current budget for LLM context
+    if r.get("max_budget_cr"):
+        cr = r["max_budget_cr"]
+        lakh = cr * 100
+        budget_label = f"Rs.{int(lakh)} lakh" if lakh == int(lakh) else f"Rs.{cr:.2f} crore"
+    elif r.get("min_budget_cr"):
+        cr = r["min_budget_cr"]
+        lakh = cr * 100
+        budget_label = f"above Rs.{int(lakh)} lakh" if lakh == int(lakh) else f"above Rs.{cr:.2f} crore"
+    else:
+        budget_label = "open (no limit)" if budget_cleared else None
+
+    area = r.get("area", "")
+
+    # Only ask for budget if it hasn't been intentionally cleared
+    if not has_budget and not budget_cleared:
+        ask_instruction = (
+            "Ask what budget range they are working with. "
+            "Be natural — e.g. 'What budget are you working with?' or 'What price range are you considering?'"
+        )
+    elif not has_area:
+        ask_instruction = (
+            "Ask which area or neighbourhood in Lucknow they prefer. "
+            "Give 2-3 options as examples: Gomti Nagar, Aliganj, Hazratganj, Indiranagar, etc."
+        )
+    elif not has_bhk and not has_type and not bhk_cleared:
+        ask_instruction = (
+            f"Area ({area}) is known. "
+            "Ask what TYPE of property they want AND how many bedrooms in one natural question. "
+            "Example: 'Are you looking for a 2 BHK flat, 3 BHK house, or maybe a villa?' "
+            "This gets both property type and BHK in one go."
+        )
+    elif not has_bhk and not bhk_cleared:
+        ask_instruction = "Ask how many bedrooms — 1 BHK, 2 BHK, or 3 BHK."
+    elif not has_type and not bhk_cleared:
+        ask_instruction = "Ask if they prefer a flat, independent house, or villa."
+    else:
+        ask_instruction = (
+            "Ask if they have any specific requirements: furnished vs unfurnished, "
+            "near metro/school/hospital, parking, floor preference, or any other amenity."
+        )
+
+    messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({
         "role": "user",
-        "content": CLARIFY_PROMPT.format(
-            message=user_message,
-            known=", ".join(known_parts) if known_parts else "nothing yet",
+        "content": (
+            f"Buyer said: \"{user_message}\"\n\n"
+            f"Your task: {ask_instruction}\n\n"
+            "Write ONE sentence only. Warm and natural. Do not ask for anything else."
         ),
     })
-    return _llm(messages, temperature=0.6, max_tokens=150)
+    return _llm(messages, temperature=0.6, max_tokens=80)
+
+
+def _show_shortlist(conv: ConversationManager, user_name: str | None) -> tuple[str, list]:
+    """Return the user's saved/shortlisted properties."""
+    from rag.retriever import to_card
+    from database.supabase_client import get_client
+
+    shortlist = conv.requirements.get("_shortlist", [])
+    if not shortlist:
+        name_part = f", {user_name}" if user_name else ""
+        return (
+            f"You haven't saved any properties yet{name_part}. "
+            "When you see one you like, click 'Save ❤️' to add it to your shortlist!",
+            [],
+        )
+
+    try:
+        client = get_client()
+        result = client.table("properties").select("*").in_("id", shortlist).execute()
+        if not result.data:
+            return "I couldn't find your saved properties. They may no longer be available.", []
+        cards = [
+            to_card({"id": r["id"], "data": r["data"], "score": 0, "similarity": 1.0})
+            for r in result.data
+        ]
+        name_part = f"{user_name}, you have" if user_name else "You have"
+        return (
+            f"{name_part} {len(cards)} saved propert{'y' if len(cards) == 1 else 'ies'}. Here they are!",
+            cards,
+        )
+    except Exception as e:
+        logger.error(f"Shortlist fetch error: {e}")
+        return "I had trouble loading your saved properties. Please try again.", []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
