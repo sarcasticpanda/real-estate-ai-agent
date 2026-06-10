@@ -7,6 +7,9 @@ Endpoints:
   GET  /properties        — list/search properties
   POST /webhook/n8n/lead  — n8n calls this after lead notification
   POST /webhook/n8n/meeting — n8n calls this after meeting scheduled
+  POST /webhook/telegram  — Telegram updates (webhook mode when hosted)
+  GET  /webhook/whatsapp  — Meta webhook verification
+  POST /webhook/whatsapp  — inbound WhatsApp messages
 
 Run:
     uvicorn api.main:app --reload --port 8000
@@ -18,10 +21,10 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -391,3 +394,99 @@ async def web_chat():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── Telegram webhook (production mode) ───────────────────────────────────────
+
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
+    """
+    Receives Telegram updates when the bot runs in webhook mode (hosted).
+    Set with: POST https://api.telegram.org/bot<TOKEN>/setWebhook?url=<PUBLIC_URL>/webhook/telegram
+    """
+    try:
+        from telegram import Update
+        from telegram.ext import Application
+        import json
+
+        token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not token:
+            raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
+
+        body = await request.json()
+        # Process update via the shared bot application
+        app_tg = Application.builder().token(token).build()
+        # Register handlers (same as polling bot)
+        from interfaces.telegram_bot import (
+            start, help_cmd, reset, profile_cmd, skip,
+            handle_message, handle_voice, button_callback,
+        )
+        from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
+        app_tg.add_handler(CommandHandler("start",   start))
+        app_tg.add_handler(CommandHandler("help",    help_cmd))
+        app_tg.add_handler(CommandHandler("reset",   reset))
+        app_tg.add_handler(CommandHandler("profile", profile_cmd))
+        app_tg.add_handler(CommandHandler("skip",    skip))
+        app_tg.add_handler(MessageHandler(filters.VOICE, handle_voice))
+        app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        app_tg.add_handler(CallbackQueryHandler(button_callback))
+
+        async with app_tg:
+            update = Update.de_json(body, app_tg.bot)
+            await app_tg.process_update(update)
+
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Telegram webhook error: {e}")
+        return {"ok": False}
+
+
+# ── WhatsApp webhook (inbound messages) ───────────────────────────────────────
+
+@app.get("/webhook/whatsapp")
+async def whatsapp_verify(request: Request):
+    """Meta calls this GET to verify the webhook. Must return hub.challenge."""
+    params = dict(request.query_params)
+    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "realestate_webhook_2026")
+    if params.get("hub.verify_token") == verify_token:
+        return PlainTextResponse(params.get("hub.challenge", ""))
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/webhook/whatsapp")
+async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receives inbound WhatsApp messages from Meta.
+    Passes them through the same AI agent as Telegram/web.
+    """
+    try:
+        body = await request.json()
+        entry = body.get("entry", [{}])[0]
+        changes = entry.get("changes", [{}])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages", [])
+
+        for msg in messages:
+            msg_type = msg.get("type")
+            sender   = msg.get("from")   # e.g. "919936659513"
+            session_id = f"wa_{sender}"
+
+            if msg_type == "text":
+                text = msg.get("text", {}).get("body", "")
+                if text:
+                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text)
+
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"WhatsApp inbound error: {e}")
+        return {"ok": True}  # always 200 to Meta or it retries
+
+
+async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str):
+    """Process inbound WhatsApp message and send reply."""
+    from notifications.whatsapp_notifier import _send
+    try:
+        reply = process_message(session_id=session_id, user_message=text, platform="whatsapp")
+        _send(sender_phone, reply)
+    except Exception as e:
+        logger.error(f"WhatsApp reply failed: {e}")

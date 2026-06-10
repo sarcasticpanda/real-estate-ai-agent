@@ -226,3 +226,32 @@ def get_property_images(property_id: str) -> list[str]:
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+# ── User Profiles (stored inside session requirements._profile) ───────────────
+
+def get_user_profile(session_id: str) -> dict:
+    """Return stored user profile dict (name, phone, email, onboarding_step)."""
+    client = get_client()
+    result = client.table("sessions").select("requirements").eq("session_id", session_id).execute()
+    if result.data:
+        req = result.data[0].get("requirements") or {}
+        return req.get("_profile") or {}
+    return {}
+
+
+def save_user_profile(session_id: str, profile: dict) -> None:
+    """Persist user profile into session requirements._profile without overwriting other fields."""
+    client = get_client()
+    result = client.table("sessions").select("requirements").eq("session_id", session_id).execute()
+    if result.data:
+        req = result.data[0].get("requirements") or {}
+        req["_profile"] = profile
+        client.table("sessions").update({"requirements": req}).eq("session_id", session_id).execute()
+    else:
+        client.table("sessions").insert({
+            "session_id": session_id,
+            "messages": [],
+            "requirements": {"_profile": profile},
+            "stage": "discovery",
+        }).execute()
