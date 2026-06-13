@@ -135,6 +135,59 @@ def _mentions_known_area(message: str) -> bool:
     return False
 
 
+def _grounded_in_message(value: str | None, message: str) -> bool:
+    """True if the extracted value actually appears in the user's message (not history)."""
+    if not value:
+        return False
+    return value.lower().replace(" ", "") in message.lower().replace(" ", "")
+
+
+def _resolve_location_switch(
+    conv: ConversationManager,
+    extracted: dict,
+    user_message: str,
+    is_diff_area: bool,
+) -> None:
+    """
+    Treat area / named_landmark / nearby as a single location group and rebuild it
+    from what THIS message actually says, so stale anchors can't leak forward.
+
+    Rules (only fire when the message carries a fresh location signal):
+      • New explicit AREA   → that area becomes the anchor; drop any stale landmark.
+      • New explicit LANDMARK (and no area named) → landmark is the anchor; drop area.
+      • Broadening ("anything near X") → drop area + stale landmark; keep new nearby.
+      • nearby is replaced by whatever this message specified (drops stale nearby).
+      • No location signal at all → leave the whole group untouched (pure refinement).
+    Only values literally present in the current message count — history re-extraction
+    by the LLM is ignored, mirroring the sticky-clear philosophy.
+    """
+    ext_area     = extracted.get("area")     if _grounded_in_message(extracted.get("area"), user_message) else None
+    ext_landmark = extracted.get("named_landmark") if _grounded_in_message(extracted.get("named_landmark"), user_message) else None
+    ext_nearby   = extracted.get("nearby") or []
+
+    has_location_signal = bool(ext_area or ext_landmark or ext_nearby or is_diff_area)
+    if not has_location_signal:
+        return  # non-location refinement (budget/BHK/etc.) — keep location as-is
+
+    # ── Area anchor ──
+    if ext_area:
+        conv.requirements["area"] = ext_area
+    elif is_diff_area or (ext_landmark and not ext_area):
+        # broadening, or a landmark with no area → the old area no longer applies
+        conv.requirements["area"] = None
+
+    # ── Landmark anchor ── (replace; None drops a stale landmark)
+    if ext_landmark:
+        conv.requirements["named_landmark"] = ext_landmark
+        conv.requirements["named_landmark_max_km"] = extracted.get("named_landmark_max_km") or 3.0
+    else:
+        conv.requirements["named_landmark"] = None
+        conv.requirements["named_landmark_max_km"] = None
+
+    # ── Nearby ── (replace with this message's list; drops stale connectivity tags)
+    conv.requirements["nearby"] = ext_nearby
+
+
 def _groq_client() -> Groq:
     key = os.environ.get("GROQ_API_KEY")
     if not key:
@@ -383,6 +436,14 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     if criteria_changed:
         conv.requirements["_shown_ids"] = []
         conv._recommendation_count = 0
+
+    # ── Location-context switch: drop stale location anchors ──────────────────
+    # area / named_landmark / nearby form ONE location group. When the user moves to
+    # a new location anchor in THIS message, any previously-stored anchor they did NOT
+    # reassert must be dropped — otherwise a stale landmark/nearby silently filters out
+    # every later search (e.g. "near Sahara Hospital" → then "what about Gomti Nagar"
+    # would keep hunting near Sahara Hospital and return nothing).
+    _resolve_location_switch(conv, extracted, user_message, is_diff_area)
 
     # ── Sticky-clear enforcement ──────────────────────────────────────────────
     # The intent extractor sees full chat history and may re-extract values the user

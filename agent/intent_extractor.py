@@ -241,7 +241,26 @@ def _postprocess(result: dict, original_message: str) -> dict:
             logger.info(f"[postprocess] nearby filtered {nearby} → {kept} (removed ungrounded)")
         result["nearby"] = kept
 
+    # ── Guard: "strong" intent REQUIRES an explicit action word in THIS message ──
+    # The LLM occasionally over-classifies bare answers ("villa", "yes") as strong,
+    # which wrongly jumps to lead capture. Enforce the invariant in code: no action
+    # word → at most "soft". This makes routing deterministic regardless of the LLM.
+    if result.get("lead_intent_level") == "strong" and not _ACTION_WORDS_RE.search(msg_lower):
+        result["lead_intent_level"] = "soft"
+        result["is_lead_ready"] = False
+        logger.info("[postprocess] downgraded strong→soft (no action word in message)")
+
     return result
+
+
+# Action words that genuinely signal readiness to act (book/visit/contact NOW)
+_ACTION_WORDS_RE = re.compile(
+    r"\b(visit|book|schedule|arrange|appointment|site visit|"
+    r"contact|call me|broker'?s? (number|contact)|give me .{0,15}number|"
+    r"proceed|i'?ll take|take this|finalize|finalise|go ahead|"
+    r"see (it|the .{1,12}) in person|meet)\b",
+    re.IGNORECASE,
+)
 
 
 # Generic place words that ground a "nearby" entry even if the exact phrase differs

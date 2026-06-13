@@ -121,8 +121,9 @@ Examples:
 "none" = browsing, searching, or answering a question (this is MOST messages)
   Examples: "I want/need a flat", "show me 3 BHK", "what's available in Aliganj", "tell me about properties"
   Answering clarifying questions is ALWAYS none: "2 BHK", "3 BHK", "Gomti Nagar", "under 50 lakh", "3 and 2", "2 or 3", "yes please show me", "yes show properties"
+  A bare PROPERTY-TYPE answer is ALWAYS none: "villa", "flat", "house", "apartment", "bungalow", "plot", "shop", "any would work", "any type", "doesn't matter"
   ⚠️ "I need a flat" = none (searching), NOT strong
-  ⚠️ Any number or BHK type response = ALWAYS none, never strong
+  ⚠️ Any number, BHK, or property-type word answered to a question = ALWAYS none, never strong
 
 "soft" = seen options, shows personal interest but not ready to act
   Examples: "this looks good", "I like property 2", "tell me more about that one", "is price negotiable?", "sounds good"
