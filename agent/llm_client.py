@@ -64,7 +64,14 @@ def _gemini_complete(messages, temperature, max_tokens, json_mode, key) -> str:
         role = "user" if m["role"] == "user" else "model"
         contents.append({"role": role, "parts": [{"text": m["content"]}]})
 
-    gen_cfg = {"temperature": temperature, "maxOutputTokens": max_tokens}
+    gen_cfg = {
+        "temperature": temperature,
+        "maxOutputTokens": max_tokens,
+        # Disable "thinking" — for intent extraction + short chat replies it only burns
+        # the output-token budget (and can yield an empty response). Ignored by models
+        # that don't support it.
+        "thinkingConfig": {"thinkingBudget": 0},
+    }
     if json_mode:
         gen_cfg["responseMimeType"] = "application/json"
 
