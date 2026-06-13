@@ -1,29 +1,16 @@
 """
-Uses Groq (LLaMA 3.1 8B Instant — free tier) to extract structured
-buyer requirements from a natural language message.
+Extracts structured buyer requirements from a natural language message.
+LLM calls route through agent/llm_client.py (Gemini primary, Groq fallback).
 """
 
 import os
 import re
 import json
 import logging
-from groq import Groq
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-_client = None
-
-
-def _get_groq_client() -> Groq:
-    global _client
-    if _client is None:
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY not set in .env — get a free key at console.groq.com")
-        _client = Groq(api_key=api_key)
-    return _client
 
 
 def extract_intent(message: str, conversation_history: list[dict] | None = None) -> dict:
@@ -43,15 +30,13 @@ def extract_intent(message: str, conversation_history: list[dict] | None = None)
     prompt = INTENT_EXTRACTION_PROMPT.format(message=message, history=history_text)
 
     try:
-        client = _get_groq_client()
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
+        from agent.llm_client import complete
+        raw = complete(
+            [{"role": "user", "content": prompt}],
             temperature=0.0,  # deterministic for structured extraction
             max_tokens=500,
-            response_format={"type": "json_object"},
+            json_mode=True,
         )
-        raw = response.choices[0].message.content.strip()
         extracted = json.loads(raw)
         logger.info(f"Extracted intent: {extracted}")
         result = _normalise(extracted)

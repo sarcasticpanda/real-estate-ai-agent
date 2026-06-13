@@ -24,7 +24,6 @@ sys.path.insert(0, str(ROOT))
 from dotenv import load_dotenv
 load_dotenv()
 
-from groq import Groq
 from agent.conversation_manager import ConversationManager
 from agent.intent_extractor import extract_intent, merge_requirements
 from agent.lead_collector import extract_name_and_phone, create_lead, notify_broker_via_n8n
@@ -38,7 +37,6 @@ from rag.prompts import (
 
 logger = logging.getLogger(__name__)
 
-GROQ_MODEL = "llama-3.1-8b-instant"
 _AUTO_NUDGE_AFTER = 3
 
 # Words that are NOT valid names
@@ -211,22 +209,10 @@ def _resolve_location_switch(
     conv.requirements["nearby"] = ext_nearby
 
 
-def _groq_client() -> Groq:
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        raise RuntimeError("GROQ_API_KEY not set in .env")
-    return Groq(api_key=key)
-
-
 def _llm(messages: list[dict], temperature: float = 0.7, max_tokens: int = 700) -> str:
-    client = _groq_client()
-    resp = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-    return resp.choices[0].message.content.strip()
+    # Gemini-primary, Groq-fallback (see agent/llm_client.py).
+    from agent.llm_client import complete
+    return complete(messages, temperature=temperature, max_tokens=max_tokens)
 
 
 def _sys(user_name: str | None = None) -> str:

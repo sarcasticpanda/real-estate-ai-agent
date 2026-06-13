@@ -10,12 +10,16 @@ Strategy (fastest/most accurate first):
 import csv
 import time
 import logging
+import requests
 from pathlib import Path
 from functools import lru_cache
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 logger = logging.getLogger(__name__)
+
+# Lucknow centre — used to bias Photon results toward the city.
+_LKO_LAT, _LKO_LNG = 26.85, 80.95
 
 # Known Lucknow area coordinates (lat, lng) — curated, accurate
 AREA_COORDS = {
@@ -127,12 +131,69 @@ def geocode_address(address: str, city: str = "Lucknow", state: str = "Uttar Pra
 
 
 def geocode_area(area_name: str, city: str = "Lucknow") -> tuple[float, float] | None:
-    """Used by the named-landmark query-time geocoding."""
+    """
+    Used by the named-landmark query-time geocoding ("near Tunday Kababi", "near Lulu Mall").
+
+    Order: known-area dict → Photon (OSM, typo-tolerant POI search) → Nominatim fallback.
+    Photon resolves named POIs/landmarks (restaurants, malls, stadiums, hospitals, schools)
+    that Nominatim frequently misses, without any hardcoded landmark list. Successful lookups
+    are cached at runtime so repeat queries are instant.
+    """
+    # 1. Known neighbourhood? (instant, for area-style inputs)
     coords = _match_area_coords(area_name)
     if coords:
         return coords
+
+    # 2. Runtime cache (self-builds from Photon/Nominatim hits this process)
+    key = area_name.strip().lower()
+    if key in _LANDMARK_CACHE:
+        return _LANDMARK_CACHE[key]
+
+    # 3. Photon — best for named landmarks/POIs
+    coords = _try_photon(f"{area_name} {city}")
+    if coords:
+        _LANDMARK_CACHE[key] = coords
+        logger.info(f"Landmark coords (Photon): '{area_name}' -> {coords}")
+        return coords
+
+    # 4. Nominatim fallback
     time.sleep(1.1)
-    return _try_nominatim(f"{area_name}, {city}, India")
+    coords = _try_nominatim(f"{area_name}, {city}, India")
+    if coords:
+        _LANDMARK_CACHE[key] = coords
+        logger.info(f"Landmark coords (Nominatim): '{area_name}' -> {coords}")
+    return coords
+
+
+_LANDMARK_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def _try_photon(query: str) -> tuple[float, float] | None:
+    """
+    Geocode via Photon (komoot, free, OSM-based, no API key). Biased to Lucknow.
+    Requires a User-Agent header or the public instance returns a non-JSON error page.
+    """
+    try:
+        resp = requests.get(
+            "https://photon.komoot.io/api",
+            params={"q": query, "limit": 1, "lat": _LKO_LAT, "lon": _LKO_LNG},
+            headers={"User-Agent": "real_estate_ai_agent/1.0"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        feats = resp.json().get("features") or []
+        if not feats:
+            return None
+        lng, lat = feats[0]["geometry"]["coordinates"]  # GeoJSON is [lon, lat]
+        # Sanity: reject results far outside the Lucknow region (~1.5 deg box)
+        if abs(lat - _LKO_LAT) > 1.5 or abs(lng - _LKO_LNG) > 1.5:
+            logger.info(f"Photon result for '{query[:40]}' outside Lucknow — rejected")
+            return None
+        return (float(lat), float(lng))
+    except Exception as e:
+        logger.warning(f"Photon error for '{query[:40]}': {type(e).__name__}: {str(e)[:80]}")
+        return None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

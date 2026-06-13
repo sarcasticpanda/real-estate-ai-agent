@@ -10,7 +10,10 @@
 ```ini
 SUPABASE_URL=https://zwfflbdazrbopeykifap.supabase.co
 SUPABASE_KEY=...           # anon/service key
-GROQ_API_KEY=...           # free at console.groq.com
+GROQ_API_KEY=...           # free at console.groq.com (fallback LLM)
+GEMINI_API_KEY=...         # free at https://aistudio.google.com/apikey (primary LLM, optional)
+GEMINI_MODEL=gemini-2.5-flash          # optional override
+GROQ_MODEL=llama-3.3-70b-versatile     # optional override (fallback model)
 TELEGRAM_BOT_TOKEN=...
 GMAIL_ADDRESS=...          # for email lead alerts
 GMAIL_APP_PASSWORD=...     # Google App Password (not your login)
@@ -74,6 +77,26 @@ print('visit→lead ', run('r6', ['50 lakh','Gomti Nagar','2 BHK','can I visit t
 
 Pass = no scenario returns all zeros where properties exist, villa shows alternatives, loc-switch
 follows the table in [03_CONVERSATION_FLOW.md §4](03_CONVERSATION_FLOW.md).
+
+## 5b. LLM provider (Gemini primary, Groq fallback)
+
+The bot routes every LLM call through `agent/llm_client.py`:
+- **Primary:** Google Gemini Flash — free tier ~1,500 req/day, **1M tokens/min** (avoids the
+  Groq rate-limit/429 issues). Get a free key (no card) at https://aistudio.google.com/apikey,
+  put it in `.env` as `GEMINI_API_KEY`.
+- **Fallback:** Groq Llama-3.3-70B — used automatically when `GEMINI_API_KEY` is unset or Gemini
+  errors/rate-limits. Works today with just your existing `GROQ_API_KEY`.
+
+No SDK needed for Gemini (called over REST via `requests`). To switch models, set `GEMINI_MODEL`
+or `GROQ_MODEL` in `.env`. The bigger models also make far fewer extraction mistakes than the old
+Llama-8B, which is why answer quality improves.
+
+## 5c. Geocoding (named-landmark "near X")
+
+`enrichment/geocoder.py` resolves a buyer's named place in this order: known-area dict → **Photon**
+(komoot, OSM, free, no key, typo-tolerant POI search) → Nominatim. Photon resolves landmarks
+Nominatim misses (Tunday Kababi, SGPGI, Bara Imambara, malls, stadiums) with no hardcoded list;
+hits are cached at runtime. No setup needed — it just works.
 
 ## 6. WhatsApp permanent token (manual, one-time)
 
