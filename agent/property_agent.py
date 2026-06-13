@@ -48,6 +48,17 @@ _NOT_A_NAME = {
 }
 _PHONE_RE = re.compile(r'^(?:\+91[-\s]?)?[6-9]\d{9}$')
 
+# Inappropriate / abusive / off-topic-harassment input — decline politely and redirect.
+# Word-boundaried to avoid false hits on legitimate property vocabulary.
+_INAPPROPRIATE_RE = re.compile(
+    r"\b(sex|sexual|sexy|sext\w*|horny|nudes?|naked|porn|p[o0]rn\w*|"
+    r"f+u+c+k+\w*|f\*+ck\w*|bsdk|chut[iya]\w*|gaand|lund|lawda|randi|madarchod|behenchod|"
+    r"d[i1]ck|pen[i1]s|vag[i1]na|pussy|boobs?|t[i1]ts|cum|blowjob|hand ?job|"
+    r"rape|slut|whore|hooker|escort|prostitut\w*|"
+    r"date me|sleep with (me|u|you)|hook ?up|make love|have sex|one night)\b",
+    re.IGNORECASE,
+)
+
 # Keywords signalling a property search (used for lead_capture escape hatch)
 _SEARCH_RE = re.compile(
     r"\b(show|properties|flats?|houses?|apartments?|bhk|budget|area|lakh|crore|crores|"
@@ -348,6 +359,21 @@ def process_message(session_id: str, user_message: str, platform: str = "web") -
     conv = ConversationManager(session_id, platform)
     conv.load()
 
+    # ── Guardrail (all platforms/stages): inappropriate or abusive input ─────
+    # Runs before onboarding AND routing so it can't be smuggled in as a "name"
+    # or slip through the clarify flow. Decline politely, do not store, do not engage.
+    if user_message != "__init__" and _INAPPROPRIATE_RE.search(user_message):
+        user_name = _get_user_name(conv)
+        name = f" {user_name}" if user_name else ""
+        return {
+            "reply": (
+                f"I'm Riya, your property consultant for Lucknow{name} — I'm here only to help "
+                "you find a home, so let's keep it professional. 🙂 What kind of property are you "
+                "looking for, and what's your budget?"
+            ),
+            "properties": [],
+        }
+
     # Web onboarding: handle BEFORE adding to history
     if platform == "web":
         onboarding_result = _handle_web_onboarding(conv, user_message)
@@ -368,6 +394,8 @@ _NOISE_RE = re.compile(r"^[\W\d\s]{1,4}$")
 
 def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     user_name = _get_user_name(conv)
+
+    # (Inappropriate/abusive input is guarded at the top of process_message.)
 
     # ── Shortlist request ─────────────────────────────────────────────────────
     if _SHORTLIST_RE.search(user_message):
@@ -960,10 +988,12 @@ def _clarify(
             f"Buyer just said: \"{user_message}\"\n\n"
             f"Your task: {ask_instruction}\n\n"
             "Reply like a warm, friendly human helping a friend house-hunt — NOT a form or a "
-            "salesperson. ONE short, casual sentence. React briefly to what they said first "
-            "(e.g. 'Nice pick!', 'Sure thing!'), then ask. Vary your wording — do NOT reuse a "
-            "phrasing you've already used in this chat, and do NOT tack on '...so I can find you "
-            "the best options' every time. Keep it light and natural."
+            "salesperson. ONE short, casual sentence. If their message gave real house-hunting "
+            "info, acknowledge it warmly first; but if it was off-topic, unclear, or not about "
+            "property, do NOT pretend to agree (never start with 'Of course!'/'Sure thing!' to "
+            "something unrelated) — instead gently steer back to the home search. Vary your "
+            "wording — don't reuse a phrasing from earlier in this chat, and don't tack on "
+            "'...so I can find you the best options' every time. Keep it light and natural."
         ),
     })
     return _llm(messages, temperature=0.75, max_tokens=70)
