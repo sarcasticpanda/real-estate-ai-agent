@@ -345,7 +345,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 #sl-btn:hover{background:#f0f4ff}
 #sl-count{display:inline-block;background:#1a73e8;color:white;border-radius:50%;width:18px;height:18px;font-size:10px;text-align:center;line-height:18px;margin-left:4px;display:none}
 #feed{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:12px 0}
-.bubble-row{display:flex;align-items:flex-end;gap:8px}
+.bubble-row{display:flex;align-items:flex-end;gap:8px;scroll-margin-top:14px}
 .bubble-row.user{flex-direction:row-reverse}
 .avatar{width:32px;height:32px;border-radius:50%;background:#1a73e8;color:white;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
 .bubble{max-width:78%;padding:10px 14px;border-radius:18px;line-height:1.55;font-size:14px;word-break:break-word}
@@ -517,8 +517,11 @@ async function send() {
     });
     const data = await res.json();
     typing.remove();
-    addBubble(data.reply, 'riya');
+    const riyaRow = addBubble(data.reply, 'riya');
     if (data.properties && data.properties.length > 0) addCards(data.properties);
+    // Land the view on the START of Riya's reply so the user reads top-to-bottom,
+    // instead of being thrown to the very bottom of the property cards.
+    requestAnimationFrame(() => riyaRow.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   } catch (e) {
     typing.textContent = 'Connection error. Try again.';
     typing.className = 'bubble riya';
@@ -541,8 +544,10 @@ function addBubble(text, who) {
   if (who === 'user') { row.appendChild(bbl); row.appendChild(av); }
   else { row.appendChild(av); row.appendChild(bbl); }
   feed.appendChild(row);
-  feed.scrollTop = feed.scrollHeight;
-  return bbl;
+  // User messages scroll to bottom (show what they just sent). Riya replies are
+  // positioned explicitly by the caller so the reader sees the START of the reply.
+  if (who === 'user') feed.scrollTop = feed.scrollHeight;
+  return row;
 }
 
 function addTyping() {
@@ -568,7 +573,7 @@ function addCards(props) {
   block.className = 'cards-block';
   props.forEach((p, idx) => block.appendChild(buildCard(p, idx + 1)));
   feed.appendChild(block);
-  feed.scrollTop = feed.scrollHeight;
+  // No forced scroll here — send() positions the view at the start of Riya's reply.
 }
 
 function buildCard(p, num) {
@@ -643,7 +648,7 @@ function buildCard(p, num) {
 
   if (p.top_amenities && p.top_amenities.length > 0) {
     const chips = document.createElement('div'); chips.className = 'pcard-chips';
-    p.top_amenities.slice(0, 5).forEach(a => {
+    p.top_amenities.slice(0, 8).forEach(a => {
       const c = document.createElement('span'); c.className = 'chip'; c.textContent = a; chips.appendChild(c);
     });
     body.appendChild(chips);

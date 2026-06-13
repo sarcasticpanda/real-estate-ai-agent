@@ -316,7 +316,7 @@ def to_card(r: dict) -> dict:
         "floor": f"{cur_f}/{tot_f}" if cur_f and tot_f else None,
         "facing": profile.get("facing"),
         "age": profile.get("construction_age"),
-        "top_amenities": [a for a in amenities[:6] if a],
+        "top_amenities": [a for a in amenities[:10] if a],
         "connectivity": connectivity,
         "images": images,
         "score": round(r.get("score", 0), 1),

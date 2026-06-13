@@ -71,11 +71,14 @@ _ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# "compare 1 and 2" / "which is better/cheaper" / "tell me about property 3" / "difference"
+# "compare 1 and 2" / "which is better/cheaper" / "tell me about property 3" / "difference" /
+# "how far is it from X" / "what's the distance"
 _COMPARE_RE = re.compile(
     r"\b(compare|difference between|vs\.?|versus|"
     r"which (is|one is|one|are)?\s*(better|best|good|cheaper|cheapest|cheap|"
     r"bigger|biggest|larger|largest|smaller|expensive|nicer|closer|newer)|"
+    r"how far|how close|what'?s? the distance|distance (from|to)|approx\w* dist\w*|"
+    r"dist\w* from|km from|far is it|far from|how many km|"
     r"tell me (more )?about (property |option |number |the )?(\d|first|second|third)|"
     r"more (details?|info) (on|about) (property |option |number |the )?(\d|first|second|third)|"
     r"property \d|option \d|(first|second|third) one)\b",
@@ -121,6 +124,26 @@ _ANY_BHK_RE = re.compile(
     r"(you|u).{0,6}(decide|choose|suggest|recommend)|open to any)\b",
     re.IGNORECASE,
 )
+
+
+_AMENITY_SYNONYM_GROUPS = [
+    ["lift", "elevator"],
+    ["gym", "gymnasium", "fitness"],
+    ["pool", "swimming"],
+    ["parking", "car park", "reserved parking"],
+    ["power backup", "generator", "inverter"],
+    ["security", "guard", "cctv", "gated"],
+    ["garden", "park facing", "lawn"],
+]
+
+
+def _amenity_synonyms(amenity: str) -> list[str]:
+    """Return the synonym set for a requested amenity (singular/plural tolerant)."""
+    a = amenity.lower().strip().rstrip("s")  # 'lifts' → 'lift'
+    for group in _AMENITY_SYNONYM_GROUPS:
+        if any(a == g.rstrip("s") or a in g for g in group):
+            return group
+    return [a, amenity.lower().strip()]
 
 
 def _mentions_known_area(message: str) -> bool:
@@ -663,25 +686,33 @@ def _recommend(
         a.lower() for a in (req.get("amenities") or [])
         if a.lower() not in _CONNECTIVITY_WORDS
     ]
-    if req_amenities and properties and not filter_note:
-        # Check if any requested amenity appears in any returned property
-        _AMENITY_SYNONYMS = {
-            "lift": ["lift", "elevator", "lifts"],
-            "gym": ["gym", "gymnasium", "fitness"],
-            "pool": ["pool", "swimming"],
-            "parking": ["parking", "car park"],
-        }
-        for req_am in req_amenities:
-            synonyms = _AMENITY_SYNONYMS.get(req_am, [req_am])
-            prop_amenity_strs = [
-                " ".join(p.get("top_amenities") or []).lower() for p in properties
-            ]
-            if not any(syn in pam for syn in synonyms for pam in prop_amenity_strs):
-                filter_note = (
-                    f"(None of the available properties have '{req_am}' in their listed amenities; "
-                    f"let the buyer know but still describe the properties shown)"
-                )
-                break
+    if req_amenities and properties:
+        # Bring properties that actually HAVE the requested amenity to the front, so
+        # "show me homes with a lift" surfaces real lift properties first.
+        def _has_amenity(p: dict, syns: list) -> bool:
+            blob = " ".join(p.get("top_amenities") or []).lower()
+            return any(s in blob for s in syns)
+
+        all_syns = [_amenity_synonyms(a) for a in req_amenities]
+        def _amenity_score(p):
+            return sum(1 for syns in all_syns if _has_amenity(p, syns))
+        properties.sort(key=_amenity_score, reverse=True)
+
+        # Honesty note: if NONE of the shown properties have a requested amenity, say so.
+        # This ALWAYS runs (even when another note exists) and takes priority, because
+        # claiming a feature a property doesn't have is the most damaging error.
+        missing = [
+            req_am for req_am, syns in zip(req_amenities, all_syns)
+            if not any(_has_amenity(p, syns) for p in properties)
+        ]
+        if missing:
+            amen_note = (
+                f"(IMPORTANT: none of these properties list {', '.join(repr(m) for m in missing)} "
+                f"among their amenities. Tell the buyer honestly you don't have a match with "
+                f"{', '.join(missing)} right now, then describe the closest options. "
+                f"You MUST NOT claim any property has a {missing[0]}.)"
+            )
+            filter_note = (amen_note + " " + filter_note) if filter_note else amen_note
 
     # ── "More options" exhausted — suggest alternatives ───────────────────────
     if not properties and is_more_request:
@@ -693,10 +724,17 @@ def _recommend(
 
         cards = [to_card(p) for p in properties]
         # Remember the most-recent visible set so the user can ask
-        # "which is better, 1 or 2?" / "tell me about property 3" afterwards.
+        # "which is better, 1 or 2?" / "tell me about property 3" / "how far is it?" after.
         conv.requirements["_last_shown_text"] = format_properties_for_llm(properties)
         conv.requirements["_last_shown_cards"] = cards
         props_text = conv.requirements["_last_shown_text"]
+
+        # A named landmark is a per-search anchor. Now that its distances are baked into
+        # the cards + summary, clear it so the NEXT search doesn't silently keep filtering
+        # "near <old place>" (e.g. user pivots to "homes under 20 lakh with a lift").
+        # Follow-up "how far is it?" questions read the distance from the stored cards.
+        conv.requirements["named_landmark"] = None
+        conv.requirements["named_landmark_max_km"] = None
         avail_note = f"\n⚠️ availability_note: {filter_note}\n" if filter_note else ""
         user_prompt = PROPERTY_RECOMMENDATION_PROMPT.format(
             count=len(properties),
@@ -717,7 +755,13 @@ def _recommend(
         conv.requirements["_liked_property_id"] = properties[0].get("id", "")
 
     rec_count = conv.get_recommendation_count()
-    should_nudge = (lead_level == "soft") or (rec_count >= _AUTO_NUDGE_AFTER and lead_level == "none")
+    # Don't nudge when there's an availability/honesty note: the nudge is a second LLM
+    # pass that regenerates the reply WITHOUT the note, and would happily parrot a
+    # feature the buyer asked for (e.g. "with a lift") that the listings don't have.
+    should_nudge = (
+        (not filter_note)
+        and ((lead_level == "soft") or (rec_count >= _AUTO_NUDGE_AFTER and lead_level == "none"))
+    )
     if should_nudge and properties:
         conv.increment_recommendation_count()
         nudge_prompt = SOFT_INTEREST_PROMPT.format(
@@ -920,12 +964,17 @@ def _compare_properties(
         "content": (
             f"The buyer is asking about properties I just showed them.\n"
             f"Their question: \"{user_message}\"\n\n"
-            f"The properties currently on screen:\n{shown_text}\n\n"
-            "As Riya, answer their question helpfully in 2-4 sentences. If they're comparing, "
-            "point out the key practical differences (price, size, BHK, location, standout amenity, "
-            "or proximity) and give a genuine recommendation based on the data. If they want detail on "
-            "one property, describe it warmly. End by asking if they'd like to visit it.\n\n"
-            "⚠️ Use ONLY the facts in the summary above — never invent prices, amenities, or features."
+            f"The properties currently on screen (these lines already include any distance "
+            f"to a place they named, e.g. 'Phoenix United Mall: 1.17 km'):\n{shown_text}\n\n"
+            "As Riya, answer their EXACT question helpfully in 2-4 sentences:\n"
+            "- If they ask how far / the distance from a place, STATE THE ACTUAL KM from the summary "
+            "above (e.g. 'It's about 1.17 km from Phoenix United Mall'). If no distance is listed, say "
+            "you'd need to confirm the exact distance.\n"
+            "- If they're comparing, point out the key practical differences (price, size, BHK, location, "
+            "standout amenity, proximity) and give a genuine recommendation.\n"
+            "- If they want detail on one property, describe it warmly.\n"
+            "End naturally (offer a visit only if it fits).\n\n"
+            "⚠️ Use ONLY the facts in the summary above — never invent prices, amenities, distances, or features."
         ),
     })
     return _llm(messages, temperature=0.5, max_tokens=220)
