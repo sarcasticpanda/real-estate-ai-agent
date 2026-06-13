@@ -38,6 +38,8 @@ from rag.prompts import (
 logger = logging.getLogger(__name__)
 
 _AUTO_NUDGE_AFTER = 3
+# Beyond this straight-line distance, a property is NOT honestly "near" a named landmark.
+_LANDMARK_NEAR_KM = 2.5
 
 # Words that are NOT valid names
 _NOT_A_NAME = {
@@ -658,6 +660,7 @@ def _recommend(
     # Check first so the buyer is told honestly we couldn't locate their landmark,
     # before any area/type mismatch messaging.
     if properties and req.get("named_landmark"):
+        landmark = req.get("named_landmark")
         lm_not_found = next(
             (p.get("named_landmark_not_found") for p in properties if p.get("named_landmark_not_found")),
             None,
@@ -668,6 +671,25 @@ def _recommend(
                 f"showing the best-matched properties instead; mention this honestly and suggest "
                 f"they confirm the exact location with our consultant)"
             )
+        else:
+            # Landmark found — but is anything actually CLOSE to it? Distances are
+            # area-level, so if the nearest is far, don't pretend it's "near".
+            dists = [p.get("named_landmark_distance_km") for p in properties
+                     if p.get("named_landmark_distance_km") is not None]
+            nearest = min(dists) if dists else None
+            if nearest is not None and nearest > _LANDMARK_NEAR_KM:
+                near_area = next(
+                    ((p.get("data") or {}).get("location", {}).get("area_name") for p in properties
+                     if (p.get("data") or {}).get("location", {}).get("area_name")),
+                    "nearby",
+                )
+                filter_note = (
+                    f"(IMPORTANT: I have NOTHING listed right near {landmark} — the closest "
+                    f"properties are about {nearest:.1f} km away in {near_area}. Be honest and warm: "
+                    f"tell the buyer you don't have anything close to {landmark} right now, the nearest "
+                    f"are ~{nearest:.0f} km away, and offer to either show those or have a consultant "
+                    f"source something closer. Do NOT call {nearest:.0f} km 'near' or 'close'.)"
+                )
 
     # ── Progressive fallback when user insists on an area but no results ──────
     area = req.get("area")
@@ -1018,14 +1040,16 @@ def _compare_properties(
             f"Their question: \"{user_message}\"\n\n"
             f"The properties currently on screen (these lines already include any distance "
             f"to a place they named, e.g. 'Phoenix United Mall: 1.17 km'):\n{shown_text}\n\n"
-            "As Riya, answer their EXACT question helpfully in 2-4 sentences:\n"
-            "- If they ask how far / the distance from a place, STATE THE ACTUAL KM from the summary "
-            "above (e.g. 'It's about 1.17 km from Phoenix United Mall'). If no distance is listed, say "
-            "you'd need to confirm the exact distance.\n"
+            "As Riya, answer their EXACT question warmly and naturally in 2-4 sentences:\n"
+            "- If they ask the distance from a place, give the EXACT figure from the summary above to "
+            "two decimals (e.g. 'It's 1.17 km from Phoenix United Mall as the crow flies — the actual "
+            "drive may be a little more'). If they asked specifically for the 'exact' distance, give the "
+            "precise number and mention it's a straight-line estimate. If no distance is listed, say you'd "
+            "need to confirm it with our consultant.\n"
             "- If they're comparing, point out the key practical differences (price, size, BHK, location, "
             "standout amenity, proximity) and give a genuine recommendation.\n"
             "- If they want detail on one property, describe it warmly.\n"
-            "End naturally (offer a visit only if it fits).\n\n"
+            "Keep it friendly and human. End naturally (offer a visit only if it fits).\n\n"
             "⚠️ Use ONLY the facts in the summary above — never invent prices, amenities, distances, or features."
         ),
     })

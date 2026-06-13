@@ -326,7 +326,7 @@ def to_card(r: dict) -> dict:
     lm_name = r.get("named_landmark")
     lm_dist = r.get("named_landmark_distance_km")
     if lm_name and lm_dist is not None:
-        card["landmark_name"] = lm_name
+        card["landmark_name"] = lm_name.title()  # tidy display ("cms ..." → "Cms ...")
         card["landmark_distance_km"] = lm_dist
 
     return card
