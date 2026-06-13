@@ -111,6 +111,21 @@ _CLEAR_BUDGET_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A short, VAGUE "no preference" reply — interpret it against whatever we just asked.
+# Matches: "any", "anything", "nay would work" (typo), "whatever", "no preference",
+# "doesn't matter", "you decide", "up to you". Anchored so it won't catch real searches.
+_VAGUE_ANY_RE = re.compile(
+    r"^\s*"
+    r"(any|anything|anyone|nay|ny|whatever|all|either|none|"
+    r"no\s*(preference|idea)|doesn'?t\s*matter|don'?t\s*care|not\s*sure|not\s*fussed|"
+    r"you\s*(decide|choose|pick|tell\s*me)|surprise\s*me|up\s*to\s*you)"
+    r"(\s+(one|thing|type|kind|bhk|budget|price|area|place))?"
+    r"(\s+(would|will|is|are|can|should))?"
+    r"(\s+(work|works|fine|okay|ok|good|do))?"
+    r"\s*[.!,]*\s*$",
+    re.IGNORECASE,
+)
+
 # "any BHK" / "doesn't matter" — clear BHK + property_type filters
 _ANY_BHK_RE = re.compile(
     r"\b(any bhk|any type|not.{0,8}(specific|particular).{0,8}bhk|bhk.{0,10}doesn'?t matter|"
@@ -398,6 +413,21 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     # Alambagh"), a broadening keyword must NOT wipe that area — they want to keep it.
     if is_diff_area and _mentions_known_area(user_message):
         is_diff_area = False
+
+    # Context-aware vague reply ("any", "nay would work", "whatever", "no preference"):
+    # the user is answering whatever we just asked, so clear THAT pending slot instead
+    # of looping the same question. Pending slot = first still-missing of budget→area→config.
+    if _VAGUE_ANY_RE.match(stripped):
+        r = conv.requirements
+        has_budget = bool(r.get("max_budget_cr") or r.get("min_budget_cr")) or r.get("_budget_cleared")
+        has_location = bool(r.get("area") or r.get("named_landmark") or r.get("nearby")) or r.get("_area_cleared")
+        has_config = bool(r.get("bhk") or r.get("property_type")) or r.get("_bhk_cleared")
+        if not has_budget:
+            clear_budget = True
+        elif not has_config:
+            clear_bhk = True
+        elif not has_location:
+            is_diff_area = True
 
     # Set sticky-clear flags BEFORE merge so merge doesn't overwrite them
     if is_diff_area:
@@ -871,7 +901,9 @@ def _clarify(
     """
     r = conv.requirements
     has_budget = bool(r.get("max_budget_cr") or r.get("min_budget_cr"))
-    has_area = bool(r.get("area"))
+    # Location is satisfied by an area OR a named landmark ("near Bhool Bhooliya") OR a
+    # nearby place — so we don't ask "which area?" when they already gave us a place.
+    has_area = bool(r.get("area") or r.get("named_landmark") or r.get("nearby"))
     has_bhk = bool(r.get("bhk"))
     has_type = bool(r.get("property_type"))
     budget_cleared = r.get("_budget_cleared", False)
@@ -925,12 +957,16 @@ def _clarify(
     messages.append({
         "role": "user",
         "content": (
-            f"Buyer said: \"{user_message}\"\n\n"
+            f"Buyer just said: \"{user_message}\"\n\n"
             f"Your task: {ask_instruction}\n\n"
-            "Write ONE sentence only. Warm and natural. Do not ask for anything else."
+            "Reply like a warm, friendly human helping a friend house-hunt — NOT a form or a "
+            "salesperson. ONE short, casual sentence. React briefly to what they said first "
+            "(e.g. 'Nice pick!', 'Sure thing!'), then ask. Vary your wording — do NOT reuse a "
+            "phrasing you've already used in this chat, and do NOT tack on '...so I can find you "
+            "the best options' every time. Keep it light and natural."
         ),
     })
-    return _llm(messages, temperature=0.6, max_tokens=80)
+    return _llm(messages, temperature=0.75, max_tokens=70)
 
 
 def _compare_properties(

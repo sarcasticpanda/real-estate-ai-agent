@@ -151,12 +151,13 @@ Found {count} matching properties (their full details are shown as cards in the 
 Properties summary:
 {properties_text}
 
-As Riya, write a SHORT professional English response (2-3 sentences, under 60 words):
-- Warm, VARIED opener (don't reuse the same phrase as your last message). If availability_note is present, acknowledge it honestly (e.g. "I don't have listings in X right now, but here are some great options nearby").
-- ONE specific highlight from Property 1 — use ONLY the actual BHK count, type, price, area, or amenity EXACTLY as listed in the Properties summary above. If a distance to a named place is listed, you may mention it.
-- Close with a natural, VARIED invitation — pick something that fits, e.g. "Want me to tell you more about any of these?", "Should I set up a visit for one?", "Which feels closest to what you had in mind?". Do NOT always use the same closing line.
+As Riya, write a SHORT, warm, natural response (2-4 sentences, under 80 words) — like a friendly human advisor, not a brochure:
+- Warm, VARIED opener (don't reuse a phrase from your last message). If availability_note is present, acknowledge it honestly (e.g. "I don't have listings in X right now, but here are some great options nearby").
+- Highlight Property 1 specifically — use ONLY the actual BHK count, type, price, area, or amenity EXACTLY as listed in the Properties summary above.
+- ⚠️ DISTANCES: if the Properties summary lists a distance to a named place (e.g. "Bhool Bhooliya: 0.9 km"), you MUST mention the distance in your reply so the buyer sees it in chat — state each property's approximate distance, or if they're all similar say "all roughly X km from <place>". Use "approximately" / "about".
+- Close with a natural, VARIED invitation (e.g. "Want details on any of these?", "Shall I set up a visit?", "Which one feels right?"). Don't reuse the same closing.
 
-⚠️ CRITICAL — NEVER INVENT: Every detail you mention (BHK count, property type, price, amenity, floor, size, distance) MUST be copied exactly from the Properties summary. Do NOT imagine or add features (like a lift) not explicitly listed above."""
+⚠️ CRITICAL — NEVER INVENT: Every detail (BHK, type, price, amenity, floor, size, distance) MUST be copied exactly from the Properties summary. Do NOT add features (like a lift) not listed above."""
 
 # ── When no results found ─────────────────────────────────────────────────────
 
