@@ -66,11 +66,22 @@ def retrieve(
 
     logger.info(f"Retrieve: area={area} bhk={requirements.get('bhk')} budget≤{max_price} exclude={len(exclude_ids or [])}")
 
-    # Fetch 6× candidates to allow dedup + exclusion + re-ranking
-    fetch_count = max(top_k * 6, 30)
+    # For a "near <landmark>" search, GEOGRAPHIC distance — not vector similarity — is the
+    # ranking signal. If we only fetched the top-N most semantically similar, the actually
+    # closest homes could be cut off before their distance is ever computed. So cast a wide
+    # net (essentially the whole city's matching inventory) and lower the threshold; the
+    # haversine distance filter does the real selecting.
+    has_landmark = bool(requirements.get("named_landmark"))
+    if has_landmark:
+        fetch_count = 500
+        effective_threshold = min(match_threshold, 0.05)
+    else:
+        fetch_count = max(top_k * 6, 30)
+        effective_threshold = match_threshold
+
     raw_results = search_properties(
         query_embedding=query_embedding,
-        match_threshold=match_threshold,
+        match_threshold=effective_threshold,
         match_count=fetch_count,
         filter_city=city,
         filter_max_price=max_price_search,
@@ -86,7 +97,7 @@ def retrieve(
         logger.info("Broadening search (no area/BHK filter)...")
         raw_results = search_properties(
             query_embedding=query_embedding,
-            match_threshold=match_threshold * 0.6,
+            match_threshold=effective_threshold * 0.6,
             match_count=fetch_count,
             filter_city=city,
             filter_max_price=max_price_search,
@@ -116,11 +127,13 @@ def retrieve(
 
     # MODE 2: Named landmark → inject real-time distances
     named_landmark = requirements.get("named_landmark")
+    landmark_found = False
     if named_landmark:
         filtered = _apply_named_landmark_distances(raw_results, named_landmark, requirements)
         # Tag results so the LLM knows if landmark was found or not
-        if filtered and filtered[0].get("named_landmark_distance_km") is not None:
+        if filtered and any(r.get("named_landmark_distance_km") is not None for r in filtered):
             raw_results = filtered  # landmark found and distances injected
+            landmark_found = True
         else:
             # Geocoding failed — tag results so LLM can explain gracefully
             for r in raw_results:
@@ -129,6 +142,12 @@ def retrieve(
 
     ranked = rank_properties(raw_results, requirements)
     ranked = _apply_connectivity_filter(ranked, requirements)
+
+    # For a "near <landmark>" search the buyer wants the CLOSEST homes first.
+    # Sort by the live-computed distance (properties without a distance go last).
+    if landmark_found:
+        ranked.sort(key=lambda r: r.get("named_landmark_distance_km")
+                    if r.get("named_landmark_distance_km") is not None else 1e9)
 
     return ranked[:top_k]
 
@@ -284,7 +303,7 @@ def to_card(r: dict) -> dict:
     cur_f = floor.get("current_floor")
     tot_f = floor.get("total_floors")
 
-    return {
+    card = {
         "id": r.get("id", ""),
         "bhk": profile.get("bhk"),
         "property_type": profile.get("property_type", ""),
@@ -302,6 +321,15 @@ def to_card(r: dict) -> dict:
         "images": images,
         "score": round(r.get("score", 0), 1),
     }
+
+    # Live distance to a buyer-named landmark (computed this query) — show it prominently.
+    lm_name = r.get("named_landmark")
+    lm_dist = r.get("named_landmark_distance_km")
+    if lm_name and lm_dist is not None:
+        card["landmark_name"] = lm_name
+        card["landmark_distance_km"] = lm_dist
+
+    return card
 
 
 _CONNECTIVITY_LIMITS = {

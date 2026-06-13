@@ -100,8 +100,29 @@ _LOWER_LIMIT_KEYWORDS = re.compile(
 )
 _LAKH_RE = re.compile(r"\b(lakh|lac|lakhs|lacs)\b", re.IGNORECASE)
 _CRORE_RE = re.compile(r"\b(crore|cr|crores)\b", re.IGNORECASE)
+_HAS_DIGIT_RE = re.compile(r"\d")
+_BUDGET_WORD_RE = re.compile(r"\b(budget|price|cost|cheap|expensive|affordable|lakh|lac|crore|cr|rupees|rs)\b", re.IGNORECASE)
 _IN_AREA_RE = re.compile(
     r"\b(?:in|at|near|around)\s+([A-Z][a-zA-Z ]{2,25}?)(?:\s+(?:under|above|below|near|with|for|\d)|$)",
+    re.IGNORECASE,
+)
+
+# Capture the place phrase after a proximity word, for the landmark fallback.
+_NEAR_PHRASE_RE = re.compile(
+    r"\b(?:near|around|close to|next to|beside|nearby|close by to)\s+(?:the\s+)?"
+    r"([a-zA-Z][a-zA-Z0-9 &.'\-]{2,45})",
+    re.IGNORECASE,
+)
+# Generic place-type words — "near metro" is a connectivity request, not a landmark.
+_GENERIC_PLACE_WORDS = {
+    "metro", "station", "hospital", "school", "park", "market", "railway",
+    "bus", "stop", "airport", "college", "temple", "highway", "road", "mall",
+    "hospitals", "schools", "parks", "markets", "stations", "here", "me", "by",
+    "it", "this", "that", "area", "areas", "location", "place", "places", "somewhere",
+}
+# Trailing filler to trim from a captured landmark phrase.
+_LANDMARK_TRAILING_RE = re.compile(
+    r"\b(instead|please|now|maybe|area|location|side|please show|under|below|above|with|for|priced).*$",
     re.IGNORECASE,
 )
 
@@ -133,6 +154,26 @@ _AREA_ALIASES: dict[str, str] = {
 def _postprocess(result: dict, original_message: str) -> dict:
     """Python-side guardrails for common LLM extraction mistakes."""
     msg_lower = original_message.lower()
+
+    # ── Guard: bhk must be a real bedroom count (1-10). 0/garbage → None ──────
+    # Prevents nonsense like "0 BHK Shop" from a bad extraction sticking in session.
+    bhk = result.get("bhk")
+    if bhk is not None and (not isinstance(bhk, int) or bhk < 1 or bhk > 10):
+        result["bhk"] = None
+        logger.info(f"[postprocess] dropped invalid bhk={bhk}")
+
+    # ── Guard: budget must be grounded in THIS message ───────────────────────
+    # The LLM sees history and often re-emits a budget the user mentioned turns ago.
+    # When merged that silently corrupts state (e.g. adds a stray min == stored max,
+    # so "under 60 lakh" later becomes "between 60 and 75 lakh"). If the current
+    # message has no number and no price word, drop the extracted budget so merge
+    # keeps the real stored value instead.
+    if not _HAS_DIGIT_RE.search(original_message) and not _BUDGET_WORD_RE.search(msg_lower):
+        if result.get("min_budget_cr") is not None or result.get("max_budget_cr") is not None:
+            logger.info(f"[postprocess] dropped ungrounded budget min={result.get('min_budget_cr')} "
+                        f"max={result.get('max_budget_cr')} (no budget signal in message)")
+            result["min_budget_cr"] = None
+            result["max_budget_cr"] = None
 
     # ── Fix city/area confusion ──────────────────────────────────────────────
     # LLM sometimes puts a neighbourhood (e.g. "Gomti Nagar") in city instead of area
@@ -233,6 +274,29 @@ def _postprocess(result: dict, original_message: str) -> dict:
             result["named_landmark_max_km"] = None
             logger.info(f"[postprocess] named_landmark '{lm}' not in message — dropped (hallucination)")
 
+    # ── Fallback: extract a named landmark the LLM missed ─────────────────────
+    # "anything near phoenix united", "near Lulu Mall", "close to Ekana Stadium" — the
+    # LLM is inconsistent about catching proper-noun places, so back it up in code.
+    # Rule: take the phrase after near/around/close-to; if it is NOT a known area and is
+    # NOT purely a generic place word (metro/hospital/...), treat it as a named landmark.
+    if not result.get("named_landmark") and not result.get("area"):
+        m = _NEAR_PHRASE_RE.search(original_message)
+        if m:
+            phrase = _clean_landmark_phrase(m.group(1))
+            if phrase:
+                p_norm = phrase.lower()
+                is_area = p_norm in _LUCKNOW_AREAS or p_norm.replace(" ", "") in {a.replace(" ", "") for a in _LUCKNOW_AREAS}
+                # strip generic place words; if anything proper-noun remains → landmark
+                residual = " ".join(w for w in p_norm.split() if w not in _GENERIC_PLACE_WORDS).strip()
+                if is_area:
+                    result["area"] = phrase.title()
+                    logger.info(f"[postprocess] near-phrase '{phrase}' is an area → area")
+                elif residual:
+                    result["named_landmark"] = phrase.title()
+                    result["named_landmark_max_km"] = result.get("named_landmark_max_km") or 5.0
+                    logger.info(f"[postprocess] landmark fallback extracted '{phrase}'")
+                # else: purely generic ("near metro") — leave to nearby handling
+
     # ── Guard: drop hallucinated nearby entries not grounded in the message ────
     nearby = result.get("nearby") or []
     if nearby:
@@ -251,6 +315,17 @@ def _postprocess(result: dict, original_message: str) -> dict:
         logger.info("[postprocess] downgraded strong→soft (no action word in message)")
 
     return result
+
+
+def _clean_landmark_phrase(raw: str) -> str:
+    """Trim a captured 'near <X>' phrase down to the place name itself."""
+    phrase = _LANDMARK_TRAILING_RE.sub("", raw).strip(" .,'-")
+    # collapse whitespace; cap length to avoid swallowing a whole sentence
+    phrase = re.sub(r"\s+", " ", phrase).strip()
+    words = phrase.split()
+    if len(words) > 5:
+        words = words[:5]
+    return " ".join(words)
 
 
 # Action words that genuinely signal readiness to act (book/visit/contact NOW)

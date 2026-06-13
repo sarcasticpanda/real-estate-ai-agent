@@ -373,6 +373,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .chip{background:#f0f4ff;color:#1a73e8;font-size:11px;padding:3px 9px;border-radius:20px;white-space:nowrap}
 .pcard-conn{font-size:12px;color:#555;margin-bottom:12px;line-height:1.7}
 .pcard-conn span{margin-right:10px}
+.pcard-landmark{display:inline-block;font-size:12px;font-weight:600;color:#0a7d3c;background:#e6f7ee;border:1px solid #b6e6cb;border-radius:6px;padding:4px 9px;margin-bottom:10px}
 .pcard-actions{display:flex;gap:8px}
 .btn-visit{flex:1;padding:10px;background:#1a73e8;color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
 .btn-visit:hover{background:#1558b0}
@@ -631,6 +632,14 @@ function buildCard(p, num) {
   if (p.floor) parts.push('Floor ' + p.floor);
   sub.textContent = parts.join('  |  ');
   body.appendChild(sub);
+
+  // Live distance to a buyer-named landmark (computed this search)
+  if (p.landmark_name && (p.landmark_distance_km || p.landmark_distance_km === 0)) {
+    const lm = document.createElement('div');
+    lm.className = 'pcard-landmark';
+    lm.textContent = '🎯 ' + p.landmark_distance_km + ' km from ' + p.landmark_name;
+    body.appendChild(lm);
+  }
 
   if (p.top_amenities && p.top_amenities.length > 0) {
     const chips = document.createElement('div'); chips.className = 'pcard-chips';

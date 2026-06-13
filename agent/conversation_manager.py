@@ -87,17 +87,26 @@ class ConversationManager:
 
     def has_enough_info(self) -> bool:
         """
-        Require budget + area + (BHK or property_type) before searching.
+        Require budget + location + (BHK or property_type) before searching.
         A "_cleared" flag counts as satisfying that slot — the user explicitly
         said they don't care about it, so we shouldn't keep asking.
+
+        "location" is satisfied by ANY of: a known area, a named landmark
+        ("near Phoenix Mall"), or a nearby place ("near metro") — so a live
+        landmark search fires without forcing the user to also name an area.
         """
         req = self.requirements
         has_budget = bool(req.get("max_budget_cr") or req.get("min_budget_cr")) or req.get("_budget_cleared", False)
-        has_area = bool(req.get("area")) or req.get("_area_cleared", False)
+        has_location = (
+            bool(req.get("area"))
+            or bool(req.get("named_landmark"))
+            or bool(req.get("nearby"))
+            or req.get("_area_cleared", False)
+        )
         has_bhk = bool(req.get("bhk"))
         has_type = bool(req.get("property_type"))
         has_config = has_bhk or has_type or req.get("_bhk_cleared", False)
-        return has_budget and has_area and has_config
+        return has_budget and has_location and has_config
 
     def is_lead_capture_stage(self) -> bool:
         return self.stage == "lead_capture"

@@ -68,13 +68,30 @@ match the vector query — and drives the honest "no villas, here are flats" not
 
 ## 4. Named-landmark live distance (the "near X" feature)
 
-When the buyer names a **specific** place ("near Sahara Hospital", "near CMS School"):
-1. Geocode the landmark **at query time** (Nominatim).
-2. Haversine distance from that point to every candidate's stored lat/lng.
-3. Filter to `named_landmark_max_km` (default 3 km); if all filtered out, return unfiltered (don't 0-out).
+When the buyer names a **specific** place ("near Sahara Hospital", "near Phoenix United", "near Ekana
+Stadium"):
+1. **Robust extraction** — a code fallback (`intent_extractor._NEAR_PHRASE_RE`) catches the place even
+   when the LLM misses it: any proper-noun phrase after near/around/close-to that is not a known area
+   and not a purely generic word (metro/hospital/…) becomes `named_landmark`.
+2. **Wide net, not vector-narrow** — when a landmark is present, geographic distance is the ranking
+   signal, so the retriever fetches a large candidate set (`fetch_count=500`, threshold lowered to 0.05)
+   instead of only the top-N most semantically similar. *This was the core bug:* with a small vector
+   fetch, the actually-closest homes were cut off before their distance was ever computed.
+3. Geocode the landmark **at query time** (Nominatim); haversine distance to every candidate's stored
+   lat/lng.
+4. Filter to `named_landmark_max_km` (default 3 km); **sort nearest-first**; if all filtered out, return
+   unfiltered (don't 0-out).
+5. The distance rides through to the property card (`landmark_name`, `landmark_distance_km`) and is shown
+   as a green "🎯 X km from <place>" badge in the web UI.
 
-**Confirmed working:** e.g. "Phoenix Mall" resolves to a real point and properties are measured against
-it (~13 km). This is genuine query-time geospatial filtering, not a stored field.
+**Confirmed working end-to-end (live HTTP):** "2 BHK under 60 lakh" → "anything near phoenix united" →
+5 homes in Alambagh, **1.17 km from Phoenix United**, all within budget, nearest-first. Switching to
+"near Ekana Stadium" recomputes live (4.31 km, different area) and drops the stale Phoenix anchor.
+
+> ⚠️ Budget-grounding guard (paired fix): the LLM used to re-emit a budget from history on these
+> location-only turns, silently creating `min==max` and filtering out everything cheaper. Budget
+> extraction is now dropped when the message has no number/price word — see
+> [03_CONVERSATION_FLOW.md §3](03_CONVERSATION_FLOW.md).
 
 ### ⚠️ Accuracy guardrails (M1/M4 — partly TODO)
 Nominatim can return the *wrong* "CMS School" or a city-centroid fallback, producing a confidently-wrong

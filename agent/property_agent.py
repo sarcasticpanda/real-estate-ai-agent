@@ -498,12 +498,16 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     budget_cleared = conv.requirements.get("_budget_cleared", False)
     bhk_cleared    = conv.requirements.get("_bhk_cleared", False)
     area_cleared   = conv.requirements.get("_area_cleared", False)
-    has_area       = bool(conv.requirements.get("area"))
+    # A landmark ("near Phoenix Mall") or a nearby place ("near metro") counts as a
+    # location anchor just like a named area — so the live distance search can fire.
+    has_location   = bool(conv.requirements.get("area")
+                          or conv.requirements.get("named_landmark")
+                          or conv.requirements.get("nearby"))
     has_bhk_or_type = bool(conv.requirements.get("bhk") or conv.requirements.get("property_type"))
 
-    # Allow search when: (budget + area + bhk/type) OR clear-flags let us relax those constraints
+    # Allow search when: (budget + location + bhk/type) OR clear-flags relax those constraints
     can_search = conv.has_enough_info() or (
-        (has_area or area_cleared) and (has_bhk_or_type or bhk_cleared) and (conv.requirements.get("max_budget_cr") or budget_cleared)
+        (has_location or area_cleared) and (has_bhk_or_type or bhk_cleared) and (conv.requirements.get("max_budget_cr") or budget_cleared)
     )
 
     if can_search:

@@ -64,6 +64,9 @@ that override LLM mistakes. These are load-bearing — do not remove without rep
 | Budget direction | "under X" put in min → swapped to max |
 | **Hallucination drop** (`_tokens_in_message`) | LLM inventing landmark/nearby the user never typed |
 | **Landmark-is-area** | area name wrongly put in `named_landmark` → moved to `area` |
+| **Landmark fallback** (`_NEAR_PHRASE_RE`) | LLM missing a real place → "near phoenix united" still extracted |
+| **Budget grounding** (`_HAS_DIGIT_RE`/`_BUDGET_WORD_RE`) | LLM re-emitting a history budget on a no-budget turn → creates `min==max`, filters out everything cheaper |
+| **bhk sanity (1–10)** | nonsense like "0 BHK Shop" dropped |
 | **Strong needs action word** (`_ACTION_WORDS_RE`) | "villa"/"yes" misclassified as strong → downgraded to soft |
 | Area scan from message | catches areas the LLM missed |
 
