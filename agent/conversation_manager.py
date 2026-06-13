@@ -79,16 +79,25 @@ class ConversationManager:
         self.requirements = merge_requirements(self.requirements, new_requirements)
 
     def set_stage(self, stage: str) -> None:
-        valid_stages = {"discovery", "recommending", "lead_capture", "done"}
+        valid_stages = {"discovery", "recommending", "lead_capture", "done", "post_lead"}
         if stage in valid_stages:
             self.stage = stage
         else:
             logger.warning(f"Unknown stage: {stage}")
 
     def has_enough_info(self) -> bool:
-        """Check if we have minimum info to run a property search."""
+        """
+        Require budget + area + (BHK or property_type) before searching.
+        A "_cleared" flag counts as satisfying that slot — the user explicitly
+        said they don't care about it, so we shouldn't keep asking.
+        """
         req = self.requirements
-        return bool(req.get("bhk") or req.get("area") or req.get("max_budget_cr"))
+        has_budget = bool(req.get("max_budget_cr") or req.get("min_budget_cr")) or req.get("_budget_cleared", False)
+        has_area = bool(req.get("area")) or req.get("_area_cleared", False)
+        has_bhk = bool(req.get("bhk"))
+        has_type = bool(req.get("property_type"))
+        has_config = has_bhk or has_type or req.get("_bhk_cleared", False)
+        return has_budget and has_area and has_config
 
     def is_lead_capture_stage(self) -> bool:
         return self.stage == "lead_capture"

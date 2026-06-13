@@ -60,21 +60,28 @@ def extract_intent(message: str, conversation_history: list[dict] | None = None)
 
     except (json.JSONDecodeError, Exception) as e:
         logger.warning(f"Intent extraction failed: {e} — returning empty requirements")
-        return _empty_requirements()
+        result = _empty_requirements()
+        result["_extraction_failed"] = True
+        return result
 
 
-def merge_requirements(existing: dict, new_extraction: dict) -> dict:
+def merge_requirements(existing: dict, new_extraction: dict, clear_area: bool = False) -> dict:
     """
     Accumulate requirements across conversation turns.
     New non-null values override existing. Lists are merged (deduplicated).
+
+    clear_area=True: wipe the stored area so the next search covers all of Lucknow.
     """
     merged = dict(existing)
+    if clear_area:
+        merged["area"] = None
+
     for key, value in new_extraction.items():
         if value is None or value == "":
             continue
         if isinstance(value, list):
             existing_list = merged.get(key, []) or []
-            combined = list(dict.fromkeys(existing_list + value))  # dedup, preserve order
+            combined = list(dict.fromkeys(existing_list + value))
             merged[key] = combined
         else:
             merged[key] = value
@@ -91,6 +98,8 @@ _LOWER_LIMIT_KEYWORDS = re.compile(
     r"\b(above|at least|minimum|min|starting from|more than|atleast)\b",
     re.IGNORECASE,
 )
+_LAKH_RE = re.compile(r"\b(lakh|lac|lakhs|lacs)\b", re.IGNORECASE)
+_CRORE_RE = re.compile(r"\b(crore|cr|crores)\b", re.IGNORECASE)
 _IN_AREA_RE = re.compile(
     r"\b(?:in|at|near|around)\s+([A-Z][a-zA-Z ]{2,25}?)(?:\s+(?:under|above|below|near|with|for|\d)|$)",
     re.IGNORECASE,
@@ -100,11 +109,24 @@ _IN_AREA_RE = re.compile(
 _LUCKNOW_AREAS = {
     "gomti nagar", "gomtinagar", "gomti nagar extension", "gomtinagar extension",
     "aliganj", "indira nagar", "indiranagar", "hazratganj", "ashiana",
-    "alambagh", "chowk", "aminabad", "mahanagar", "raj bhavan road",
-    "thakurganj", "kapoorthala", "vikas nagar", "jankipuram",
+    "alambagh", "alam bagh", "chowk", "aminabad", "mahanagar", "raj bhavan road",
+    "thakurganj", "kapoorthala", "vikas nagar", "jankipuram", "vibhuti khand",
     "kursi road", "faizabad road", "sultanpur road", "rae bareli road",
     "chinhat", "sarojini nagar", "transport nagar", "vrindavan yojna",
-    "sushant golf city", "kalyanpur",
+    "sushant golf city", "kalyanpur", "lucknow",
+}
+
+# Aliases → canonical name (handle typos, short forms)
+_AREA_ALIASES: dict[str, str] = {
+    "alam bagh": "Alambagh",
+    "alambaag": "Alambagh",
+    "aalam bagh": "Alambagh",
+    "gomtinagar": "Gomti Nagar",
+    "indiranagar": "Indira Nagar",
+    "indra nagar": "Indira Nagar",
+    "hazrat ganj": "Hazratganj",
+    "sarojini ngr": "Sarojini Nagar",
+    "vrindavan": "Vrindavan Yojna",
 }
 
 
@@ -120,6 +142,31 @@ def _postprocess(result: dict, original_message: str) -> dict:
             result["area"] = city.title()
         result["city"] = "Lucknow"
         logger.info(f"[postprocess] city '{city}' is a Lucknow area — moved to area, city=Lucknow")
+
+    # ── Fix lakh/crore unit confusion ────────────────────────────────────────
+    # LLM often extracts "15 lakh" as 15.0 (treating it as crore).
+    # If message mentions "lakh" but NOT "crore", divide any budget > 1 by 100.
+    has_lakh  = bool(_LAKH_RE.search(msg_lower))
+    has_crore = bool(_CRORE_RE.search(msg_lower))
+    if has_lakh and not has_crore:
+        for key in ("max_budget_cr", "min_budget_cr"):
+            val = result.get(key)
+            if val is not None and val >= 1.0:
+                corrected = round(val / 100, 4)
+                result[key] = corrected
+                logger.info(f"[postprocess] Lakh conversion: {key} {val} → {corrected} crore")
+
+    # ── Fix same min=max (LLM set both to same value for a single budget statement) ──
+    # "budget 15 lakh" → min=0.15, max=0.15 → wrong; should be max=0.15, min=None
+    min_cr = result.get("min_budget_cr")
+    max_cr = result.get("max_budget_cr")
+    if min_cr is not None and max_cr is not None and abs(min_cr - max_cr) < 0.001:
+        if _LOWER_LIMIT_KEYWORDS.search(msg_lower) and not _UPPER_LIMIT_KEYWORDS.search(msg_lower):
+            result["max_budget_cr"] = None  # explicit "above X" → min only
+        else:
+            result["min_budget_cr"] = None  # "budget X" → upper limit by default
+            min_cr = None
+        logger.info(f"[postprocess] Same min=max resolved → max={result.get('max_budget_cr')} min={result.get('min_budget_cr')}")
 
     # ── Fix budget direction ─────────────────────────────────────────────────
     # If LLM put budget in min but the message says "under/below/within/budget X"
@@ -140,20 +187,87 @@ def _postprocess(result: dict, original_message: str) -> dict:
             result["max_budget_cr"] = None
             logger.info(f"[postprocess] Budget direction corrected: max→min ({max_cr})")
 
-    # ── Fix missing area ─────────────────────────────────────────────────────
+    # ── Fix missing area — scan entire message for known Lucknow areas ──────────
+    # Catches "alambagh maybe", "like gomti nagar", "prefer aliganj" etc.
     if not result.get("area"):
-        # Try regex "in/at/near [Area Name]"
-        m = _IN_AREA_RE.search(original_message)
-        if m:
-            candidate = m.group(1).strip().lower()
-            # Check if it resembles a known Lucknow area (fuzzy: any known area keyword)
-            for known in _LUCKNOW_AREAS:
-                if candidate in known or known in candidate or known.split()[0] in candidate:
-                    result["area"] = m.group(1).strip().title()
-                    logger.info(f"[postprocess] Area rescued: '{result['area']}'")
+        msg_lower_clean = re.sub(r"[,\.!?]", " ", msg_lower)
+        words = msg_lower_clean.split()
+        found_area = None
+        # Try multi-word areas first (longest match), then single-word
+        for known in sorted(_LUCKNOW_AREAS, key=len, reverse=True):
+            if known == "lucknow":
+                continue  # don't confuse city with area
+            kw = known.split()
+            for i in range(len(words) - len(kw) + 1):
+                if words[i:i + len(kw)] == kw:
+                    found_area = _AREA_ALIASES.get(known, known.title())
                     break
+            if found_area:
+                break
+        if found_area:
+            result["area"] = found_area
+            logger.info(f"[postprocess] Area scanned from message: '{found_area}'")
+
+    # ── Apply area aliases to LLM-extracted area ─────────────────────────────
+    if result.get("area"):
+        alias = _AREA_ALIASES.get(result["area"].lower())
+        if alias:
+            result["area"] = alias
+
+    # ── Guard: named_landmark must not be a known area, and must appear in msg ──
+    # The LLM sometimes (a) puts an area name into named_landmark, or (b) hallucinates
+    # a landmark/nearby place the user never typed. Both break geocoding + retrieval.
+    lm = result.get("named_landmark")
+    if lm:
+        lm_norm = lm.lower().strip()
+        # (a) area mistaken for a landmark → move to area
+        if lm_norm in _LUCKNOW_AREAS or lm_norm.replace(" ", "") in {a.replace(" ", "") for a in _LUCKNOW_AREAS}:
+            if not result.get("area"):
+                result["area"] = lm.title()
+            result["named_landmark"] = None
+            result["named_landmark_max_km"] = None
+            logger.info(f"[postprocess] named_landmark '{lm}' is an area — moved to area")
+        # (b) landmark not present in the original message → hallucination, drop it
+        elif not _tokens_in_message(lm_norm, msg_lower):
+            result["named_landmark"] = None
+            result["named_landmark_max_km"] = None
+            logger.info(f"[postprocess] named_landmark '{lm}' not in message — dropped (hallucination)")
+
+    # ── Guard: drop hallucinated nearby entries not grounded in the message ────
+    nearby = result.get("nearby") or []
+    if nearby:
+        kept = [n for n in nearby if _tokens_in_message(n.lower(), msg_lower)]
+        if kept != nearby:
+            logger.info(f"[postprocess] nearby filtered {nearby} → {kept} (removed ungrounded)")
+        result["nearby"] = kept
 
     return result
+
+
+# Generic place words that ground a "nearby" entry even if the exact phrase differs
+_NEARBY_ANCHORS = (
+    "metro", "hospital", "school", "park", "market", "mall", "station",
+    "railway", "bus", "airport", "college", "temple", "highway",
+)
+
+
+def _tokens_in_message(phrase: str, msg_lower: str) -> bool:
+    """
+    True if the extracted place is grounded in the user's message — either it appears
+    as a substring, or it shares a meaningful place-anchor word (metro, mall, etc.)
+    that is also present in the message. Prevents the LLM inventing places.
+    """
+    phrase = phrase.strip().lstrip("near ").strip()
+    if not phrase:
+        return False
+    if phrase in msg_lower:
+        return True
+    # Any anchor word that is in BOTH the phrase and the message counts as grounded
+    for anchor in _NEARBY_ANCHORS:
+        if anchor in phrase and anchor in msg_lower:
+            return True
+    # Otherwise require at least one word of the phrase to appear in the message
+    return any(w in msg_lower for w in phrase.split() if len(w) > 2)
 
 
 def _normalise(extracted: dict) -> dict:

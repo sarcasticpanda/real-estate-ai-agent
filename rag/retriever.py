@@ -35,6 +35,7 @@ def retrieve(
     requirements: dict,
     top_k: int = 5,
     match_threshold: float = 0.25,
+    exclude_ids: list | None = None,
 ) -> list[dict]:
     """
     Unified retrieval. Automatically handles both general and specific queries.
@@ -44,60 +45,91 @@ def retrieve(
       amenities, nearby (list of strings),
       named_landmark (str) — set when user asks "near <specific place>"
       named_landmark_max_km (float) — max acceptable distance to that landmark
+
+    exclude_ids: property IDs to skip (already shown to user in this session).
     """
     query_embedding = embed_text(query)
 
     max_price = int(requirements["max_budget_cr"] * CRORE) if requirements.get("max_budget_cr") else None
     min_price = int(requirements["min_budget_cr"] * CRORE) if requirements.get("min_budget_cr") else None
+    # 25% buffer so nearby-priced properties are visible; ranker penalises over-budget ones.
+    max_price_search = int(max_price * 1.25) if max_price else None
 
-    # Normalize city: if it's a Lucknow neighbourhood, treat as city=Lucknow
     city = requirements.get("city", "Lucknow") or "Lucknow"
     if city.lower() != "lucknow":
-        logger.info(f"City normalized: '{city}' → 'Lucknow'")
         city = "Lucknow"
 
-    # Normalize area: "Gomti Nagar" → "Gomtinagar" so ILIKE matches "Gomtinagar Extension"
+    # Strip spaces so "Gomti Nagar" → "GomtiNagar" for ILIKE matching
     area = requirements.get("area")
     if area:
-        area_no_space = area.replace(" ", "")
-        area = area_no_space  # e.g. "GomtiNagar" — but lower + ILIKE handles case
+        area = area.replace(" ", "")
 
-    logger.info(f"Retrieve: city={city} area={area} bhk={requirements.get('bhk')} max_price={max_price}")
+    logger.info(f"Retrieve: area={area} bhk={requirements.get('bhk')} budget≤{max_price} exclude={len(exclude_ids or [])}")
 
-    # Fetch more candidates than needed so we can re-rank
+    # Fetch 6× candidates to allow dedup + exclusion + re-ranking
+    fetch_count = max(top_k * 6, 30)
     raw_results = search_properties(
         query_embedding=query_embedding,
         match_threshold=match_threshold,
-        match_count=top_k * 4,
+        match_count=fetch_count,
         filter_city=city,
-        filter_max_price=max_price,
+        filter_max_price=max_price_search,
         filter_min_price=min_price,
         filter_bhk=requirements.get("bhk"),
         filter_area=area,
     )
 
-    logger.info(f"Vector search: {len(raw_results)} candidates")
+    logger.info(f"Vector search: {len(raw_results)} candidates (with area filter)")
 
     if not raw_results:
-        # Broaden search — remove BHK + area filters
-        logger.info("Broadening search (relaxed filters)...")
+        # Broaden: drop area + BHK filters, keep budget
+        logger.info("Broadening search (no area/BHK filter)...")
         raw_results = search_properties(
             query_embedding=query_embedding,
             match_threshold=match_threshold * 0.6,
-            match_count=top_k * 3,
+            match_count=fetch_count,
             filter_city=city,
-            filter_max_price=max_price,
+            filter_max_price=max_price_search,
         )
 
     if not raw_results:
         return []
 
-    # MODE 2: If user specified a named landmark, inject real-time distances
+    # Deduplicate by property ID (DB may have duplicate rows after re-embedding)
+    seen: set = set()
+    deduped = []
+    for r in raw_results:
+        pid = r.get("id")
+        if pid and pid not in seen:
+            seen.add(pid)
+            deduped.append(r)
+    raw_results = deduped
+
+    # Exclude already-shown property IDs so "more options" returns fresh results
+    if exclude_ids:
+        excl = set(exclude_ids)
+        raw_results = [r for r in raw_results if r.get("id") not in excl]
+        logger.info(f"After exclusion: {len(raw_results)} candidates remaining")
+
+    if not raw_results:
+        return []
+
+    # MODE 2: Named landmark → inject real-time distances
     named_landmark = requirements.get("named_landmark")
     if named_landmark:
-        raw_results = _apply_named_landmark_distances(raw_results, named_landmark, requirements)
+        filtered = _apply_named_landmark_distances(raw_results, named_landmark, requirements)
+        # Tag results so the LLM knows if landmark was found or not
+        if filtered and filtered[0].get("named_landmark_distance_km") is not None:
+            raw_results = filtered  # landmark found and distances injected
+        else:
+            # Geocoding failed — tag results so LLM can explain gracefully
+            for r in raw_results:
+                r["named_landmark_not_found"] = named_landmark
+            raw_results = filtered
 
     ranked = rank_properties(raw_results, requirements)
+    ranked = _apply_connectivity_filter(ranked, requirements)
+
     return ranked[:top_k]
 
 
@@ -120,6 +152,10 @@ def _apply_named_landmark_distances(
     landmark_coords = geocode_area(f"{landmark_name}, {city}", city)
     if not landmark_coords:
         logger.warning(f"Could not geocode landmark '{landmark_name}' — skipping distance filter")
+        # Tag every result so the agent/LLM can honestly tell the buyer we couldn't
+        # locate the landmark, rather than silently showing unrelated properties.
+        for r in results:
+            r["named_landmark_not_found"] = landmark_name
         return results
 
     lm_lat, lm_lng = landmark_coords
@@ -164,7 +200,15 @@ def format_properties_for_llm(properties: list[dict]) -> str:
         floor = profile.get("floor_info", {})
 
         price = pricing.get("total_price_inr")
-        price_str = f"Rs.{price / CRORE:.2f} Cr" if price else "Price on request"
+        if price:
+            if price >= CRORE:
+                cr = price / CRORE
+                price_str = f"Rs.{cr:.2g} Cr" if cr != int(cr) else f"Rs.{int(cr)} Cr"
+            else:
+                lakh = price / 100_000
+                price_str = f"Rs.{lakh:.0f} lakh" if lakh == int(lakh) else f"Rs.{lakh:.1f} lakh"
+        else:
+            price_str = "Price on request"
 
         conn_parts = []
         for key, label in [
@@ -189,24 +233,126 @@ def format_properties_for_llm(properties: list[dict]) -> str:
         if landmark_dist is not None and landmark_name:
             conn_parts.insert(0, f"{landmark_name}: {landmark_dist} km")
 
-        images = data.get("images") or []
-        image_line = f"  Photos: {', '.join(images[:3])}\n" if images else ""
-
         lines.append(
             f"Property {i}:\n"
-            f"  ID: {r.get('id', '')}\n"
             f"  Type: {profile.get('bhk')} BHK {profile.get('property_type')}\n"
             f"  Location: {location.get('area_name')}, {location.get('city')}\n"
             f"  Price: {price_str}\n"
             f"  Area: {profile.get('builtup_area_sqft')} sqft\n"
-            f"  Floor: {floor.get('current_floor')}/{floor.get('total_floors')}\n"
             f"  Furnishing: {profile.get('furnishing')}\n"
-            f"  Amenities: {', '.join(amenities[:8])}\n"
-            f"  Nearby: {', '.join(conn_parts) or 'N/A'}\n"
-            f"{image_line}"
-            f"  Match Score: {r.get('score', 0):.1f}/100\n"
+            f"  Top amenities: {', '.join(amenities[:4])}\n"
+            f"  Nearby: {', '.join(conn_parts[:3]) or 'N/A'}\n"
         )
     return "\n".join(lines)
+
+
+def to_card(r: dict) -> dict:
+    """Convert a ranked result into a structured property card dict for the web UI."""
+    data = r.get("data", {})
+    profile  = data.get("property_profile", {})
+    location = data.get("location", {})
+    pricing  = data.get("pricing", {})
+    conn     = data.get("connectivity", {})
+    amenities = data.get("amenities", [])
+    floor    = profile.get("floor_info", {})
+
+    price = pricing.get("total_price_inr")
+    if price:
+        if price >= CRORE:
+            cr = price / CRORE
+            price_str = f"Rs.{cr:.2g} Cr" if cr != int(cr) else f"Rs.{int(cr)} Cr"
+        else:
+            lakh = price / 100_000
+            price_str = f"Rs.{lakh:.0f} lakh" if lakh == int(lakh) else f"Rs.{lakh:.1f} lakh"
+    else:
+        price_str = "Price on request"
+
+    # Ensure Unsplash images have CDN params so browsers load them without redirect
+    raw_images = data.get("images") or []
+    images = []
+    for url in raw_images[:4]:
+        if "unsplash.com/photo-" in url and "?" not in url:
+            url = url + "?w=800&q=80&fit=crop&auto=format"
+        images.append(url)
+
+    connectivity = {}
+    for key, label in [("metro", "Metro"), ("hospital", "Hospital"), ("school", "School"), ("market", "Market"), ("bus_stop", "Bus")]:
+        dist = conn.get(f"{key}_distance_km")
+        if dist is not None:
+            connectivity[label] = f"{dist} km"
+
+    cur_f = floor.get("current_floor")
+    tot_f = floor.get("total_floors")
+
+    return {
+        "id": r.get("id", ""),
+        "bhk": profile.get("bhk"),
+        "property_type": profile.get("property_type", ""),
+        "area": location.get("area_name", ""),
+        "city": location.get("city", "Lucknow"),
+        "price_str": price_str,
+        "price_inr": int(price) if price else None,
+        "sqft": profile.get("builtup_area_sqft"),
+        "furnishing": profile.get("furnishing"),
+        "floor": f"{cur_f}/{tot_f}" if cur_f and tot_f else None,
+        "facing": profile.get("facing"),
+        "age": profile.get("construction_age"),
+        "top_amenities": [a for a in amenities[:6] if a],
+        "connectivity": connectivity,
+        "images": images,
+        "score": round(r.get("score", 0), 1),
+    }
+
+
+_CONNECTIVITY_LIMITS = {
+    "metro": 3.0,
+    "railway": 5.0,
+    "hospital": 3.0,
+    "school": 2.0,
+    "market": 3.0,
+    "bus": 2.0,
+    "bus stop": 2.0,
+    "airport": 15.0,
+}
+
+
+def _apply_connectivity_filter(results: list[dict], requirements: dict) -> list[dict]:
+    """
+    Hard post-filter: remove properties that are too far from requested nearby places.
+    Only applies when nearby list is non-empty and at least some properties satisfy it.
+    """
+    nearby = [n.lower() for n in (requirements.get("nearby") or [])]
+    if not nearby:
+        return results
+
+    conn_key_map = {
+        "metro": "metro_distance_km",
+        "railway": "railway_distance_km",
+        "hospital": "hospital_distance_km",
+        "school": "school_distance_km",
+        "market": "market_distance_km",
+        "bus": "bus_stop_distance_km",
+        "bus stop": "bus_stop_distance_km",
+        "airport": "airport_distance_km",
+    }
+
+    filtered = []
+    for r in results:
+        conn = (r.get("data") or {}).get("connectivity") or {}
+        passes = True
+        for want in nearby:
+            for keyword, conn_key in conn_key_map.items():
+                if keyword in want:
+                    limit = _CONNECTIVITY_LIMITS.get(keyword, 5.0)
+                    dist = conn.get(conn_key)
+                    if dist is not None and dist > limit:
+                        passes = False
+                    break
+        if passes:
+            filtered.append(r)
+
+    # Only apply filter if at least 2 properties pass — otherwise return unfiltered
+    return filtered if len(filtered) >= 2 else results
 
 
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

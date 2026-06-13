@@ -63,6 +63,25 @@ _SHORTLIST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Strong action words — buyer wants to act NOW (visit/book), not just discuss
+_ACTION_RE = re.compile(
+    r"\b(visit|book|schedule|arrange|contact|call me|broker|proceed|"
+    r"i'?ll take|interested in (buying|booking)|site visit|see it in person|"
+    r"meet|appointment|finalize|go ahead)\b",
+    re.IGNORECASE,
+)
+
+# "compare 1 and 2" / "which is better/cheaper" / "tell me about property 3" / "difference"
+_COMPARE_RE = re.compile(
+    r"\b(compare|difference between|vs\.?|versus|"
+    r"which (is|one is|one|are)?\s*(better|best|good|cheaper|cheapest|cheap|"
+    r"bigger|biggest|larger|largest|smaller|expensive|nicer|closer|newer)|"
+    r"tell me (more )?about (property |option |number |the )?(\d|first|second|third)|"
+    r"more (details?|info) (on|about) (property |option |number |the )?(\d|first|second|third)|"
+    r"property \d|option \d|(first|second|third) one)\b",
+    re.IGNORECASE,
+)
+
 # "show more / other options" — exclude already-shown properties
 _MORE_OPTIONS_RE = re.compile(
     r"\b(more options|more properties|show more|other options|different options|"
@@ -76,7 +95,10 @@ _DIFF_AREA_RE = re.compile(
     r"\b(more areas?|other areas?|different areas?|another area|different location|"
     r"other locations?|change area|somewhere else|other parts?|any areas?|"
     r"broader search|anywhere in lucknow|expand search|all areas?|"
-    r"across lucknow|whole lucknow|entire lucknow)\b",
+    r"across lucknow|whole lucknow|entire lucknow|"
+    r"anything.{0,20}near|any propert\w*.{0,12}near|"
+    r"show.{0,12}near|find.{0,12}near|"
+    r"properties? anywhere|flats? anywhere|houses? anywhere)\b",
     re.IGNORECASE,
 )
 
@@ -92,9 +114,25 @@ _CLEAR_BUDGET_RE = re.compile(
 _ANY_BHK_RE = re.compile(
     r"\b(any bhk|any type|not.{0,8}(specific|particular).{0,8}bhk|bhk.{0,10}doesn'?t matter|"
     r"any flat|any house|any property|any configuration|don'?t care.{0,10}bhk|"
-    r"not.{0,5}(2|3|4) bhk|whatever type|any size)\b",
+    r"not.{0,5}(2|3|4) bhk|whatever type|any size|"
+    r"any.{0,8}(would|will|is|are)?.{0,5}(work|fine|good|ok|okay|do)|"
+    r"anything.{0,6}(works?|fine|good|ok)|doesn'?t matter|"
+    r"no preference|whatever.{0,6}(works?|you have|is available)|"
+    r"(you|u).{0,6}(decide|choose|suggest|recommend)|open to any)\b",
     re.IGNORECASE,
 )
+
+
+def _mentions_known_area(message: str) -> bool:
+    """True if the message contains a recognised Lucknow neighbourhood name."""
+    from agent.intent_extractor import _LUCKNOW_AREAS
+    msg = message.lower().replace(" ", "")
+    for area in _LUCKNOW_AREAS:
+        if area == "lucknow":
+            continue
+        if area.replace(" ", "") in msg:
+            return True
+    return False
 
 
 def _groq_client() -> Groq:
@@ -143,6 +181,11 @@ def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict
     if user_message == "__init__":
         if step == "complete":
             name = profile.get("name")
+            # Reset all search requirements on each session start so the bot asks
+            # qualifying questions fresh instead of using stale session data.
+            # Keep only _profile (name, phone) — discard old budget/area/BHK/flags.
+            conv.requirements = {"_profile": profile}
+            conv.set_stage("discovery")
             if name:
                 return {"reply": f"Welcome back, {name}! What are you looking for today?", "properties": []}
             return {"reply": "Hello! I'm Riya, your property consultant for Lucknow. What are you looking for?", "properties": []}
@@ -253,6 +296,16 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     if _SHORTLIST_RE.search(user_message):
         return _show_shortlist(conv, user_name)
 
+    # ── Compare / detail request about already-shown properties ───────────────
+    # Only if we've shown properties AND the user isn't trying to act (visit/book) or
+    # in lead capture. A message like "I love the first one, can I visit?" must fall
+    # through to intent extraction → strong intent → lead capture, NOT comparison.
+    if (conv.requirements.get("_last_shown_text")
+            and _COMPARE_RE.search(user_message)
+            and not _ACTION_RE.search(user_message)
+            and not conv.is_lead_capture_stage()):
+        return _compare_properties(conv, user_message, user_name), conv.requirements.get("_last_shown_cards", [])
+
     # ── Stage: collecting name + phone ───────────────────────────────────────
     if conv.is_lead_capture_stage():
         if _SEARCH_RE.search(user_message):
@@ -279,6 +332,11 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     clear_budget    = bool(_CLEAR_BUDGET_RE.search(user_message))
     clear_bhk       = bool(_ANY_BHK_RE.search(user_message))
 
+    # If the user named a specific area in THIS message (e.g. "anything near metro in
+    # Alambagh"), a broadening keyword must NOT wipe that area — they want to keep it.
+    if is_diff_area and _mentions_known_area(user_message):
+        is_diff_area = False
+
     # Set sticky-clear flags BEFORE merge so merge doesn't overwrite them
     if is_diff_area:
         conv.requirements["area"] = None
@@ -292,14 +350,39 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
         conv.requirements["property_type"] = None
         conv.requirements["_bhk_cleared"] = True
 
-    # When user changes search params, reset nudge counter so they see fresh results
+    # When user changes search params, reset nudge counter AND shown_ids for fresh results
     if clear_budget or clear_bhk or is_diff_area:
         conv._recommendation_count = 0
+        conv.requirements["_shown_ids"] = []
 
     # ── Extract intent ────────────────────────────────────────────────────────
+    # Snapshot key filters BEFORE merge so we can detect what the user changed.
+    prev_nearby = list(conv.requirements.get("nearby") or [])
+    prev_bhk    = conv.requirements.get("bhk")
+    prev_budget = conv.requirements.get("max_budget_cr")
+    prev_area   = conv.requirements.get("area")
+
     extracted = extract_intent(user_message, conv.get_history_for_llm())
     conv.requirements = merge_requirements(conv.requirements, extracted)
     lead_level = extracted.get("lead_intent_level", "none")
+
+    # If LLM extraction completely failed, ask a clarifying question rather than searching blind
+    if extracted.get("_extraction_failed"):
+        return _clarify(conv, user_message, user_name), []
+
+    # Reset shown_ids whenever any core search criterion changes — so a new search
+    # context (different BHK, budget, area, or nearby place) returns fresh results
+    # instead of being filtered against the previously-shown set.
+    new_nearby = conv.requirements.get("nearby") or []
+    criteria_changed = (
+        (new_nearby and new_nearby != prev_nearby)
+        or conv.requirements.get("bhk") != prev_bhk
+        or conv.requirements.get("max_budget_cr") != prev_budget
+        or conv.requirements.get("area") != prev_area
+    )
+    if criteria_changed:
+        conv.requirements["_shown_ids"] = []
+        conv._recommendation_count = 0
 
     # ── Sticky-clear enforcement ──────────────────────────────────────────────
     # The intent extractor sees full chat history and may re-extract values the user
@@ -353,12 +436,13 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     # ── Decide whether to search or keep clarifying ───────────────────────────
     budget_cleared = conv.requirements.get("_budget_cleared", False)
     bhk_cleared    = conv.requirements.get("_bhk_cleared", False)
+    area_cleared   = conv.requirements.get("_area_cleared", False)
     has_area       = bool(conv.requirements.get("area"))
     has_bhk_or_type = bool(conv.requirements.get("bhk") or conv.requirements.get("property_type"))
 
-    # Allow search when: (budget + area + bhk/type) OR (area + bhk/type + no-budget-flag)
+    # Allow search when: (budget + area + bhk/type) OR clear-flags let us relax those constraints
     can_search = conv.has_enough_info() or (
-        has_area and (has_bhk_or_type or bhk_cleared) and (conv.requirements.get("max_budget_cr") or budget_cleared)
+        (has_area or area_cleared) and (has_bhk_or_type or bhk_cleared) and (conv.requirements.get("max_budget_cr") or budget_cleared)
     )
 
     if can_search:
@@ -438,6 +522,21 @@ def _recommend(
 
     properties = retrieve(search_query, req, top_k=5, exclude_ids=exclude)
 
+    # ── Named landmark not found (geocoding failed) — HIGHEST priority note ────
+    # Check first so the buyer is told honestly we couldn't locate their landmark,
+    # before any area/type mismatch messaging.
+    if properties and req.get("named_landmark"):
+        lm_not_found = next(
+            (p.get("named_landmark_not_found") for p in properties if p.get("named_landmark_not_found")),
+            None,
+        )
+        if lm_not_found:
+            filter_note = (
+                f"(I couldn't pinpoint '{lm_not_found}' on the map to measure exact distances — "
+                f"showing the best-matched properties instead; mention this honestly and suggest "
+                f"they confirm the exact location with our consultant)"
+            )
+
     # ── Progressive fallback when user insists on an area but no results ──────
     area = req.get("area")
     if not properties and area:
@@ -454,10 +553,7 @@ def _recommend(
         if properties:
             filter_note = f"(I've shown all available in {area} — some may be above your stated budget)"
 
-    # ── Detect area mismatch: retriever's internal fallback dropped the area filter ──
-    # When DB has no properties in the requested area, retrieve() silently returns
-    # results from other areas. Detect this and tell the LLM so it doesn't falsely
-    # claim "in Aliganj" while showing Hazratganj properties.
+    # ── Detect area mismatch ──────────────────────────────────────────────────
     if area and properties and not filter_note:
         req_area_norm = area.lower().replace(" ", "")
         prop_areas = [(p.get("area") or "").lower().replace(" ", "") for p in properties]
@@ -470,6 +566,58 @@ def _recommend(
                 f"from {alt_text} instead; mention this honestly to the buyer)"
             )
 
+    # ── Detect type mismatch (e.g. user asked for villas, DB has only flats) ──
+    req_type = (req.get("property_type") or "").lower().strip()
+    if req_type and properties and not filter_note:
+        _VILLA_GRP = {"villa", "house", "bungalow", "independent house", "independent"}
+        _FLAT_GRP = {"flat", "apartment", "builder floor", "builder's floor", "floor"}
+
+        def _same_type_group(t1: str, t2: str) -> bool:
+            if t1 == t2: return True
+            if t1 in _VILLA_GRP and t2 in _VILLA_GRP: return True
+            if t1 in _FLAT_GRP and t2 in _FLAT_GRP: return True
+            return False
+
+        prop_types = [(p.get("property_type") or "").lower() for p in properties]
+        if not any(_same_type_group(req_type, pt) for pt in prop_types):
+            shown_types = sorted(set(pt.title() for pt in prop_types if pt))
+            alt = "/".join(shown_types[:2]) if shown_types else "available properties"
+            filter_note = (
+                f"(No {req_type}s available with the current filters — "
+                f"showing {alt} as the closest alternatives; acknowledge this to the buyer)"
+            )
+
+    # ── Detect amenity mismatch (e.g. "with lift" but no property has lifts) ──
+    # NOTE: only check true amenities. Connectivity items (metro/hospital/school/etc.)
+    # come via `nearby` and are handled by distance filtering in the retriever — they are
+    # NOT listed in a property's amenities, so checking them here gives false negatives.
+    _CONNECTIVITY_WORDS = {"metro", "metro station", "railway", "railway station", "station",
+                            "hospital", "school", "market", "bus", "bus stop", "airport",
+                            "park", "mall", "college", "highway"}
+    req_amenities = [
+        a.lower() for a in (req.get("amenities") or [])
+        if a.lower() not in _CONNECTIVITY_WORDS
+    ]
+    if req_amenities and properties and not filter_note:
+        # Check if any requested amenity appears in any returned property
+        _AMENITY_SYNONYMS = {
+            "lift": ["lift", "elevator", "lifts"],
+            "gym": ["gym", "gymnasium", "fitness"],
+            "pool": ["pool", "swimming"],
+            "parking": ["parking", "car park"],
+        }
+        for req_am in req_amenities:
+            synonyms = _AMENITY_SYNONYMS.get(req_am, [req_am])
+            prop_amenity_strs = [
+                " ".join(p.get("top_amenities") or []).lower() for p in properties
+            ]
+            if not any(syn in pam for syn in synonyms for pam in prop_amenity_strs):
+                filter_note = (
+                    f"(None of the available properties have '{req_am}' in their listed amenities; "
+                    f"let the buyer know but still describe the properties shown)"
+                )
+                break
+
     # ── "More options" exhausted — suggest alternatives ───────────────────────
     if not properties and is_more_request:
         return _suggest_alternatives(conv, user_name), []
@@ -479,7 +627,11 @@ def _recommend(
         conv.requirements["_shown_ids"] = list(dict.fromkeys(shown_ids + new_ids))
 
         cards = [to_card(p) for p in properties]
-        props_text = format_properties_for_llm(properties)
+        # Remember the most-recent visible set so the user can ask
+        # "which is better, 1 or 2?" / "tell me about property 3" afterwards.
+        conv.requirements["_last_shown_text"] = format_properties_for_llm(properties)
+        conv.requirements["_last_shown_cards"] = cards
+        props_text = conv.requirements["_last_shown_text"]
         avail_note = f"\n⚠️ availability_note: {filter_note}\n" if filter_note else ""
         user_prompt = PROPERTY_RECOMMENDATION_PROMPT.format(
             count=len(properties),
@@ -629,6 +781,7 @@ def _clarify(
     has_type = bool(r.get("property_type"))
     budget_cleared = r.get("_budget_cleared", False)
     bhk_cleared = r.get("_bhk_cleared", False)
+    area_cleared = r.get("_area_cleared", False)
 
     # Format current budget for LLM context
     if r.get("max_budget_cr"):
@@ -650,7 +803,7 @@ def _clarify(
             "Ask what budget range they are working with. "
             "Be natural — e.g. 'What budget are you working with?' or 'What price range are you considering?'"
         )
-    elif not has_area:
+    elif not has_area and not area_cleared:
         ask_instruction = (
             "Ask which area or neighbourhood in Lucknow they prefer. "
             "Give 2-3 options as examples: Gomti Nagar, Aliganj, Hazratganj, Indiranagar, etc."
@@ -683,6 +836,34 @@ def _clarify(
         ),
     })
     return _llm(messages, temperature=0.6, max_tokens=80)
+
+
+def _compare_properties(
+    conv: ConversationManager,
+    user_message: str,
+    user_name: str | None,
+) -> str:
+    """
+    Answer a comparison or detail question ("which is better 1 or 2?",
+    "tell me about property 3") using the properties most recently shown.
+    Grounded strictly in the stored property summary — never invents data.
+    """
+    shown_text = conv.requirements.get("_last_shown_text", "")
+    messages = [{"role": "system", "content": _sys(user_name)}]
+    messages.append({
+        "role": "user",
+        "content": (
+            f"The buyer is asking about properties I just showed them.\n"
+            f"Their question: \"{user_message}\"\n\n"
+            f"The properties currently on screen:\n{shown_text}\n\n"
+            "As Riya, answer their question helpfully in 2-4 sentences. If they're comparing, "
+            "point out the key practical differences (price, size, BHK, location, standout amenity, "
+            "or proximity) and give a genuine recommendation based on the data. If they want detail on "
+            "one property, describe it warmly. End by asking if they'd like to visit it.\n\n"
+            "⚠️ Use ONLY the facts in the summary above — never invent prices, amenities, or features."
+        ),
+    })
+    return _llm(messages, temperature=0.5, max_tokens=220)
 
 
 def _show_shortlist(conv: ConversationManager, user_name: str | None) -> tuple[str, list]:

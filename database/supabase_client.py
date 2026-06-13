@@ -23,16 +23,29 @@ def get_client() -> Client:
 # ── Properties ──────────────────────────────────────────────────────────────
 
 def upsert_property(doc: dict, semantic_text: str, embedding: list[float]) -> dict:
-    """Insert or update a property record."""
+    """Insert or update a property record. Preserves existing images if present in DB."""
     client = get_client()
     location = doc.get("location", {})
-    pricing = doc.get("pricing", {})
-    profile = doc.get("property_profile", {})
+    pricing  = doc.get("pricing", {})
+    profile  = doc.get("property_profile", {})
+
+    # Preserve images already stored in Supabase (assign_fake_images.py writes them there).
+    # When re-embedding from local JSON, the local file has no images field, so we keep DB images.
+    merged_data = dict(doc)
+    if not merged_data.get("images"):
+        try:
+            existing = client.table("properties").select("data").eq("id", doc["doc_id"]).execute()
+            if existing.data:
+                db_images = (existing.data[0].get("data") or {}).get("images")
+                if db_images:
+                    merged_data["images"] = db_images
+        except Exception:
+            pass
 
     row = {
         "id": doc["doc_id"],
         "property_id": doc["source_ids"]["property_id"],
-        "data": doc,
+        "data": merged_data,
         "semantic_text": semantic_text,
         "embedding": embedding,
         "area_name": location.get("area_name"),

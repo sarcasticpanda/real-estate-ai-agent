@@ -2,14 +2,16 @@
 FastAPI application — the central API server.
 
 Endpoints:
-  POST /chat              — user sends a message, gets AI reply
-  POST /upload            — broker uploads a CSV file
-  GET  /properties        — list/search properties
-  POST /webhook/n8n/lead  — n8n calls this after lead notification
-  POST /webhook/n8n/meeting — n8n calls this after meeting scheduled
-  POST /webhook/telegram  — Telegram updates (webhook mode when hosted)
-  GET  /webhook/whatsapp  — Meta webhook verification
-  POST /webhook/whatsapp  — inbound WhatsApp messages
+  POST /chat                    — user sends a message, gets AI reply
+  POST /shortlist               — save a property to session shortlist
+  GET  /shortlist/{session_id}  — retrieve user's saved properties
+  POST /upload                  — broker uploads a CSV file
+  GET  /properties              — list/search properties
+  POST /webhook/n8n/lead        — n8n calls this after lead notification
+  POST /webhook/n8n/meeting     — n8n calls this after meeting scheduled
+  POST /webhook/telegram        — Telegram updates (webhook mode when hosted)
+  GET  /webhook/whatsapp        — Meta webhook verification
+  POST /webhook/whatsapp        — inbound WhatsApp messages
 
 Run:
     uvicorn api.main:app --reload --port 8000
@@ -38,6 +40,7 @@ from broker.upload_handler import process_csv
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
+    get_session, save_session,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -68,20 +71,108 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
+    properties: list = []
 
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     """Send a message to the property AI assistant."""
     try:
-        reply = process_message(
+        result = process_message(
             session_id=req.session_id,
             user_message=req.message,
             platform=req.platform,
         )
-        return ChatResponse(session_id=req.session_id, reply=reply)
+        return ChatResponse(
+            session_id=req.session_id,
+            reply=result["reply"],
+            properties=result.get("properties", []),
+        )
     except Exception as e:
         logger.error(f"Chat error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Shortlist endpoints ───────────────────────────────────────────────────────
+
+class ShortlistRequest(BaseModel):
+    session_id: str
+    property_id: str
+
+
+@app.post("/shortlist")
+async def save_to_shortlist(req: ShortlistRequest):
+    """Add a property to the user's session shortlist."""
+    try:
+        session = get_session(req.session_id)
+        requirements = session.get("requirements") or {}
+        shortlist = requirements.get("_shortlist") or []
+
+        if req.property_id not in shortlist:
+            shortlist.append(req.property_id)
+            requirements["_shortlist"] = shortlist
+            save_session(
+                session_id=req.session_id,
+                messages=session.get("messages") or [],
+                requirements=requirements,
+                stage=session.get("stage") or "discovery",
+            )
+            return {"ok": True, "saved": True, "count": len(shortlist)}
+        return {"ok": True, "saved": False, "count": len(shortlist), "note": "already saved"}
+    except Exception as e:
+        logger.error(f"Shortlist save error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/shortlist")
+async def remove_from_shortlist(req: ShortlistRequest):
+    """Remove a property from the user's session shortlist."""
+    try:
+        session = get_session(req.session_id)
+        requirements = session.get("requirements") or {}
+        shortlist = requirements.get("_shortlist") or []
+
+        if req.property_id in shortlist:
+            shortlist.remove(req.property_id)
+            requirements["_shortlist"] = shortlist
+            save_session(
+                session_id=req.session_id,
+                messages=session.get("messages") or [],
+                requirements=requirements,
+                stage=session.get("stage") or "discovery",
+            )
+        return {"ok": True, "count": len(shortlist)}
+    except Exception as e:
+        logger.error(f"Shortlist remove error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/shortlist/{session_id}")
+async def get_shortlist(session_id: str):
+    """Get the user's saved/shortlisted properties."""
+    try:
+        from rag.retriever import to_card
+        from database.supabase_client import get_client
+
+        session = get_session(session_id)
+        requirements = session.get("requirements") or {}
+        shortlist = requirements.get("_shortlist") or []
+
+        if not shortlist:
+            return {"count": 0, "properties": []}
+
+        client = get_client()
+        result = client.table("properties").select("*").in_("id", shortlist).execute()
+        if not result.data:
+            return {"count": 0, "properties": []}
+
+        cards = [
+            to_card({"id": r["id"], "data": r["data"], "score": 0, "similarity": 1.0})
+            for r in result.data
+        ]
+        return {"count": len(cards), "properties": cards}
+    except Exception as e:
+        logger.error(f"Shortlist fetch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -93,14 +184,9 @@ async def upload_properties(
     file: UploadFile = File(...),
     broker_id: str = Form(None),
 ):
-    """
-    Broker uploads a CSV file. Processing runs in the background.
-    Returns immediately with a job acknowledgement.
-    """
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
-    # Save uploaded file to temp location
     content = await file.read()
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
     tmp.write(content)
@@ -134,7 +220,6 @@ async def get_properties(
     area: str = None,
     limit: int = 10,
 ):
-    """Search properties using semantic query + filters."""
     from rag.retriever import retrieve
 
     requirements = {
@@ -157,7 +242,6 @@ class LeadWebhook(BaseModel):
 
 @app.post("/webhook/n8n/lead")
 async def lead_webhook(payload: LeadWebhook):
-    """n8n calls this to update lead status after broker responds."""
     update_lead_status(payload.lead_id, payload.status, payload.notes)
     return {"ok": True}
 
@@ -166,13 +250,12 @@ class MeetingWebhook(BaseModel):
     lead_id: str
     broker_id: str
     property_id: str
-    scheduled_at: str  # ISO datetime string
+    scheduled_at: str
     duration_minutes: int = 60
 
 
 @app.post("/webhook/n8n/meeting")
 async def meeting_webhook(payload: MeetingWebhook):
-    """n8n calls this after broker confirms a meeting slot."""
     from database.supabase_client import get_client
 
     meeting = save_meeting({
@@ -184,20 +267,15 @@ async def meeting_webhook(payload: MeetingWebhook):
         "status": "confirmed",
     })
 
-    # Create Google Calendar event (non-blocking — failure doesn't affect response)
     calendar_link = None
     try:
         from notifications.calendar_integration import send_calendar_invite
-
         client = get_client()
-        lead_rows = client.table("leads").select("*").eq("id", payload.lead_id).execute()
+        lead_rows   = client.table("leads").select("*").eq("id", payload.lead_id).execute()
         broker_rows = client.table("brokers").select("*").eq("id", payload.broker_id).execute()
-        lead = lead_rows.data[0] if lead_rows.data else {}
+        lead   = lead_rows.data[0]   if lead_rows.data   else {}
         broker = broker_rows.data[0] if broker_rows.data else {}
-
         calendar_link = send_calendar_invite(meeting, lead, broker)
-        if calendar_link:
-            logger.info(f"Calendar event created: {calendar_link}")
     except Exception as e:
         logger.warning(f"Calendar integration skipped: {e}")
 
@@ -206,7 +284,6 @@ async def meeting_webhook(payload: MeetingWebhook):
 
 @app.get("/meetings/upcoming")
 async def upcoming_meetings(hours_ahead: int = 24):
-    """Get meetings in the next N hours (used by n8n reminder workflow)."""
     meetings = get_upcoming_meetings(hours_ahead)
     return {"count": len(meetings), "meetings": meetings}
 
@@ -219,11 +296,6 @@ MAX_IMAGE_SIZE_MB = 5
 
 @app.post("/properties/{property_id}/images")
 async def upload_image(property_id: str, file: UploadFile = File(...)):
-    """
-    Broker uploads a property image.
-    Stores in Supabase Storage bucket 'property-images'.
-    Bucket must be created in Supabase dashboard and set to public.
-    """
     content_type = file.content_type or "image/jpeg"
     if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {content_type}. Use JPEG/PNG/WebP.")
@@ -241,17 +313,11 @@ async def upload_image(property_id: str, file: UploadFile = File(...)):
 
     add_image_url_to_property(property_id, public_url)
 
-    return {
-        "ok": True,
-        "property_id": property_id,
-        "image_url": public_url,
-        "filename": filename,
-    }
+    return {"ok": True, "property_id": property_id, "image_url": public_url, "filename": filename}
 
 
 @app.get("/properties/{property_id}/images")
 async def get_images(property_id: str):
-    """Get all image URLs for a property."""
     images = get_property_images(property_id)
     return {"property_id": property_id, "count": len(images), "images": images}
 
@@ -260,132 +326,408 @@ async def get_images(property_id: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def web_chat():
-    """Chat UI with markdown rendering and image support."""
-    return """<!DOCTYPE html>
+    """Chat UI with property cards, image galleries, and shortlist."""
+    return r"""<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Riya — Real Estate AI Lucknow</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f4f8; display: flex; justify-content: center; padding: 16px; }
-    #app { width: 100%; max-width: 720px; display: flex; flex-direction: column; height: calc(100vh - 32px); }
-    #header { text-align: center; padding: 14px; }
-    #header h1 { color: #1a73e8; font-size: 22px; }
-    #header p { color: #666; font-size: 13px; margin-top: 4px; }
-    #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: white; border-radius: 16px; border: 1px solid #e0e0e0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-    .msg { max-width: 85%; padding: 12px 16px; border-radius: 18px; line-height: 1.6; }
-    .msg b, .msg strong { font-weight: 700; }
-    .user { align-self: flex-end; background: #1a73e8; color: white; border-bottom-right-radius: 4px; }
-    .assistant { align-self: flex-start; background: #f0f4ff; color: #1a1a2e; border-bottom-left-radius: 4px; }
-    .assistant ul { padding-left: 20px; margin: 6px 0; }
-    .assistant li { margin: 3px 0; }
-    .prop-images { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-    .prop-images img { width: 110px; height: 80px; object-fit: cover; border-radius: 8px; cursor: pointer; border: 2px solid #e0e0e0; }
-    .prop-images img:hover { border-color: #1a73e8; transform: scale(1.05); }
-    #input-area { display: flex; gap: 8px; padding: 12px 0; }
-    #input { flex: 1; padding: 12px 18px; border-radius: 24px; border: 1.5px solid #ddd; font-size: 15px; outline: none; background: white; }
-    #input:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,0.15); }
-    #send { padding: 12px 24px; background: #1a73e8; color: white; border: none; border-radius: 24px; cursor: pointer; font-size: 15px; font-weight: 600; }
-    #send:hover { background: #1558b0; }
-    #send:disabled { background: #aaa; cursor: default; }
-    .typing-dots { display: inline-block; color: #999; font-style: italic; }
-    .lightbox { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; cursor: pointer; }
-    .lightbox img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Riya - Real Estate AI Lucknow</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f7fa;min-height:100vh}
+#wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;height:100vh;padding:0 12px}
+#hdr{text-align:center;padding:10px 0 6px;display:flex;align-items:center;justify-content:center;gap:10px}
+#hdr h1{font-size:20px;color:#1a73e8;font-weight:700}
+#hdr p{font-size:12px;color:#888;margin-top:2px}
+#hdr-left{flex:1}
+#sl-btn{background:#fff;border:1.5px solid #1a73e8;color:#1a73e8;border-radius:20px;padding:6px 14px;font-size:13px;cursor:pointer;font-weight:600;white-space:nowrap}
+#sl-btn:hover{background:#f0f4ff}
+#sl-count{display:inline-block;background:#1a73e8;color:white;border-radius:50%;width:18px;height:18px;font-size:10px;text-align:center;line-height:18px;margin-left:4px;display:none}
+#feed{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:12px 0}
+.bubble-row{display:flex;align-items:flex-end;gap:8px}
+.bubble-row.user{flex-direction:row-reverse}
+.avatar{width:32px;height:32px;border-radius:50%;background:#1a73e8;color:white;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0}
+.bubble{max-width:78%;padding:10px 14px;border-radius:18px;line-height:1.55;font-size:14px;word-break:break-word}
+.bubble.user{background:#1a73e8;color:white;border-bottom-right-radius:4px}
+.bubble.riya{background:white;color:#1a1a2e;border-bottom-left-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.10)}
+.typing{font-style:italic;color:#999;padding:10px 14px;background:white;border-radius:18px;border-bottom-left-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.10);font-size:14px;align-self:flex-start}
+/* property cards */
+.cards-block{width:100%;display:flex;flex-direction:column;gap:14px;margin-top:4px}
+.pcard{background:white;border-radius:16px;box-shadow:0 2px 12px rgba(0,0,0,.10);overflow:hidden}
+.pcard-gallery{position:relative;height:200px;background:#dde3ed;overflow:hidden}
+.pcard-gallery img{width:100%;height:100%;object-fit:cover;display:block;cursor:pointer;transition:.2s}
+.pcard-gallery img:hover{transform:scale(1.03)}
+.gal-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:white;border:none;padding:6px 10px;cursor:pointer;font-size:16px;border-radius:6px;z-index:2}
+.gal-nav.prev{left:6px}
+.gal-nav.next{right:6px}
+.gal-dots{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);display:flex;gap:5px;z-index:2}
+.gal-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.5);cursor:pointer}
+.gal-dot.on{background:white}
+.pcard-body{padding:14px 16px 16px}
+.pcard-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px}
+.pcard-title{font-size:15px;font-weight:700;color:#1a1a2e}
+.pcard-price{font-size:16px;font-weight:800;color:#1a73e8;white-space:nowrap;margin-left:8px}
+.pcard-sub{font-size:12px;color:#666;margin-bottom:10px}
+.pcard-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.chip{background:#f0f4ff;color:#1a73e8;font-size:11px;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.pcard-conn{font-size:12px;color:#555;margin-bottom:12px;line-height:1.7}
+.pcard-conn span{margin-right:10px}
+.pcard-actions{display:flex;gap:8px}
+.btn-visit{flex:1;padding:10px;background:#1a73e8;color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
+.btn-visit:hover{background:#1558b0}
+.btn-save{padding:10px 14px;background:#fff;color:#e83030;border:1.5px solid #e83030;border-radius:10px;font-size:14px;cursor:pointer;transition:.15s;white-space:nowrap}
+.btn-save:hover{background:#fff0f0}
+.btn-save.saved{background:#e83030;color:white}
+.btn-save.saved:hover{background:#c42020}
+/* lightbox */
+#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:1000;align-items:center;justify-content:center;cursor:pointer}
+#lb img{max-width:92vw;max-height:90vh;border-radius:10px}
+/* shortlist panel */
+#sl-panel{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:500;align-items:flex-start;justify-content:center;overflow-y:auto;padding:20px 12px}
+#sl-box{background:#f5f7fa;border-radius:16px;max-width:720px;width:100%;padding:20px}
+#sl-box h2{margin-bottom:14px;color:#1a1a2e;font-size:18px}
+#sl-close{float:right;background:none;border:none;font-size:22px;cursor:pointer;color:#555}
+#sl-cards{display:flex;flex-direction:column;gap:14px}
+/* input */
+#bar{display:flex;gap:8px;padding:10px 0 14px;align-items:center}
+#inp{flex:1;padding:11px 18px;border-radius:24px;border:1.5px solid #ddd;font-size:14px;outline:none;background:white}
+#inp:focus{border-color:#1a73e8;box-shadow:0 0 0 3px rgba(26,115,232,.13)}
+#send-btn{padding:11px 22px;background:#1a73e8;color:white;border:none;border-radius:24px;cursor:pointer;font-size:14px;font-weight:700}
+#send-btn:hover{background:#1558b0}
+#send-btn:disabled{background:#aaa;cursor:default}
+#mic-btn{padding:10px 14px;background:#fff;border:1.5px solid #ddd;border-radius:50%;cursor:pointer;font-size:18px;line-height:1;transition:.15s;flex-shrink:0}
+#mic-btn:hover{border-color:#1a73e8;background:#f0f4ff}
+#mic-btn.listening{background:#e83030;border-color:#e83030;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+@media(max-width:480px){.pcard-gallery{height:160px}.pcard-price{font-size:14px}}
+</style>
 </head>
 <body>
-<div id="lightbox" class="lightbox" onclick="this.style.display='none'">
-  <img id="lightbox-img" src="" alt="Property photo"/>
+<div id="lb" onclick="this.style.display='none'"><img id="lb-img" src="" alt=""/></div>
+
+<!-- Shortlist panel -->
+<div id="sl-panel" onclick="if(event.target===this)closeShortlist()">
+  <div id="sl-box">
+    <button id="sl-close" onclick="closeShortlist()">&#10005;</button>
+    <h2>&#10084;&#65039; Saved Properties</h2>
+    <div id="sl-cards"><p style="color:#888;font-size:14px">Loading...</p></div>
+  </div>
 </div>
-<div id="app">
-  <div id="header">
-    <h1>Riya — Real Estate AI</h1>
-    <p>Find your dream home in Lucknow</p>
+
+<div id="wrap">
+  <div id="hdr">
+    <div id="hdr-left">
+      <h1>Riya - Real Estate AI</h1>
+      <p>Find your dream home in Lucknow</p>
+    </div>
+    <button id="sl-btn" onclick="openShortlist()">&#10084;&#65039; Saved <span id="sl-count">0</span></button>
   </div>
-  <div id="messages">
-    <div class="msg assistant">Namaste! I'm Riya, your personal property assistant for Lucknow. 🏠<br><br>Tell me what you're looking for — BHK, area, budget, or anything specific like near metro or hospital!</div>
-  </div>
-  <div id="input-area">
-    <input id="input" placeholder="e.g. 3 BHK in Gomti Nagar under 1.5 crore near metro..." />
-    <button id="send" onclick="sendMessage()">Send</button>
+  <div id="feed"></div>
+  <div id="bar">
+    <input id="inp" placeholder="Type your message..." />
+    <button id="mic-btn" title="Voice input">🎤</button>
+    <button id="send-btn" onclick="send()">Send</button>
   </div>
 </div>
 <script>
-  const SESSION_ID = 'web_' + Math.random().toString(36).slice(2, 10);
-  const messagesEl = document.getElementById('messages');
-  const inputEl = document.getElementById('input');
-  const sendBtn = document.getElementById('send');
+// ── Session persistence via localStorage ──────────────────────────────────
+let SID = localStorage.getItem('riya_sid');
+if (!SID) {
+  SID = 'web_' + Math.random().toString(36).slice(2, 11);
+  localStorage.setItem('riya_sid', SID);
+}
 
-  inputEl.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) sendMessage(); });
+const feed    = document.getElementById('feed');
+const inp     = document.getElementById('inp');
+const sendBtn = document.getElementById('send-btn');
+const slCount = document.getElementById('sl-count');
 
-  async function sendMessage() {
-    const text = inputEl.value.trim();
-    if (!text || sendBtn.disabled) return;
-    inputEl.value = '';
-    sendBtn.disabled = true;
-    appendText(text, 'user');
-    const typingEl = appendText('Typing...', 'assistant typing-dots');
-    try {
-      const res = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: SESSION_ID, message: text, platform: 'web' })
+// Track saved property IDs client-side for instant UI feedback
+const savedIds = new Set(JSON.parse(localStorage.getItem('riya_saved') || '[]'));
+updateSlCount();
+
+inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) send(); });
+
+// ── Web Speech API (microphone) ───────────────────────────────────────────
+const micBtn = document.getElementById('mic-btn');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR();
+  rec.lang = 'en-IN';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+  rec.onresult = e => {
+    const transcript = e.results[0][0].transcript;
+    inp.value = transcript;
+    micBtn.textContent = '🎤';
+    micBtn.classList.remove('listening');
+    micBtn.disabled = false;
+    // Auto-send after a short pause so user can see the transcript
+    setTimeout(() => { if (inp.value.trim()) send(); }, 400);
+  };
+  rec.onerror = () => { micBtn.textContent = '🎤'; micBtn.classList.remove('listening'); micBtn.disabled = false; };
+  rec.onend = () => { micBtn.textContent = '🎤'; micBtn.classList.remove('listening'); micBtn.disabled = false; };
+  micBtn.onclick = () => {
+    micBtn.textContent = '🔴';
+    micBtn.classList.add('listening');
+    micBtn.disabled = true;
+    rec.start();
+  };
+} else {
+  micBtn.style.display = 'none'; // browser doesn't support Web Speech API
+}
+
+// ── Auto-init: send a silent "hi" to start onboarding on page load ──────
+window.addEventListener('load', () => {
+  sendSilent('__init__');
+});
+
+async function sendSilent(msg) {
+  const typing = addTyping();
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: SID, message: msg, platform: 'web' }),
+    });
+    const data = await res.json();
+    typing.remove();
+    addBubble(data.reply, 'riya');
+    if (data.properties && data.properties.length > 0) addCards(data.properties);
+  } catch (e) {
+    typing.textContent = 'Connection error. Please refresh.';
+    typing.className = 'bubble riya';
+  }
+}
+
+async function send() {
+  const txt = inp.value.trim();
+  if (!txt || sendBtn.disabled) return;
+  inp.value = '';
+  sendBtn.disabled = true;
+  addBubble(txt, 'user');
+  const typing = addTyping();
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: SID, message: txt, platform: 'web' }),
+    });
+    const data = await res.json();
+    typing.remove();
+    addBubble(data.reply, 'riya');
+    if (data.properties && data.properties.length > 0) addCards(data.properties);
+  } catch (e) {
+    typing.textContent = 'Connection error. Try again.';
+    typing.className = 'bubble riya';
+  } finally {
+    sendBtn.disabled = false;
+    inp.focus();
+  }
+}
+
+function addBubble(text, who) {
+  const row = document.createElement('div');
+  row.className = 'bubble-row' + (who === 'user' ? ' user' : '');
+  const av = document.createElement('div');
+  av.className = 'avatar';
+  av.textContent = who === 'user' ? 'U' : 'R';
+  if (who === 'user') av.style.background = '#555';
+  const bbl = document.createElement('div');
+  bbl.className = 'bubble ' + who;
+  bbl.innerHTML = mdToHtml(text);
+  if (who === 'user') { row.appendChild(bbl); row.appendChild(av); }
+  else { row.appendChild(av); row.appendChild(bbl); }
+  feed.appendChild(row);
+  feed.scrollTop = feed.scrollHeight;
+  return bbl;
+}
+
+function addTyping() {
+  const el = document.createElement('div');
+  el.className = 'typing';
+  el.textContent = 'Riya is typing...';
+  feed.appendChild(el);
+  feed.scrollTop = feed.scrollHeight;
+  return el;
+}
+
+function mdToHtml(t) {
+  return t
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/_(.+?)_/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+
+function addCards(props) {
+  const block = document.createElement('div');
+  block.className = 'cards-block';
+  props.forEach((p, idx) => block.appendChild(buildCard(p, idx + 1)));
+  feed.appendChild(block);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function buildCard(p, num) {
+  const card = document.createElement('div');
+  card.className = 'pcard';
+
+  // Gallery
+  const imgs = p.images || [];
+  const gal = document.createElement('div');
+  gal.className = 'pcard-gallery';
+  if (imgs.length > 0) {
+    let cur = 0;
+    const imgEl = document.createElement('img');
+    imgEl.src = imgs[0];
+    imgEl.alt = 'Property photo';
+    imgEl.onerror = () => { imgEl.style.display = 'none'; };
+    imgEl.onclick = () => { document.getElementById('lb-img').src = imgEl.src; document.getElementById('lb').style.display = 'flex'; };
+    gal.appendChild(imgEl);
+
+    if (imgs.length > 1) {
+      const dots = document.createElement('div'); dots.className = 'gal-dots';
+      imgs.forEach((_, i) => {
+        const d = document.createElement('div');
+        d.className = 'gal-dot' + (i === 0 ? ' on' : '');
+        dots.appendChild(d);
       });
-      const data = await res.json();
-      typingEl.remove();
-      appendRich(data.reply, 'assistant');
-    } catch (e) {
-      typingEl.textContent = 'Connection error. Please try again.';
-      typingEl.className = 'msg assistant';
-    } finally {
-      sendBtn.disabled = false;
-      inputEl.focus();
+      gal.appendChild(dots);
+
+      const prevBtn = document.createElement('button'); prevBtn.className = 'gal-nav prev'; prevBtn.textContent = '<';
+      const nextBtn = document.createElement('button'); nextBtn.className = 'gal-nav next'; nextBtn.textContent = '>';
+      const allDots = dots.querySelectorAll('.gal-dot');
+      function goTo(i) {
+        cur = i; imgEl.src = imgs[cur];
+        allDots.forEach((d, j) => d.classList.toggle('on', j === cur));
+      }
+      prevBtn.onclick = e => { e.stopPropagation(); goTo((cur - 1 + imgs.length) % imgs.length); };
+      nextBtn.onclick = e => { e.stopPropagation(); goTo((cur + 1) % imgs.length); };
+      allDots.forEach((d, i) => d.onclick = () => goTo(i));
+      gal.appendChild(prevBtn); gal.appendChild(nextBtn);
     }
   }
+  card.appendChild(gal);
 
-  function appendText(text, cls) {
-    const el = document.createElement('div');
-    el.className = 'msg ' + cls;
-    el.textContent = text;
-    messagesEl.appendChild(el);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return el;
+  // Body
+  const body = document.createElement('div');
+  body.className = 'pcard-body';
+
+  const top = document.createElement('div'); top.className = 'pcard-top';
+  const title = document.createElement('div'); title.className = 'pcard-title';
+  title.textContent = num + '. ' + (p.bhk || '') + ' BHK ' + (p.property_type || '');
+  const price = document.createElement('div'); price.className = 'pcard-price';
+  price.textContent = (p.price_str || '').replace('Rs.', 'Rs.​');
+  top.appendChild(title); top.appendChild(price);
+  body.appendChild(top);
+
+  const sub = document.createElement('div'); sub.className = 'pcard-sub';
+  const parts = [];
+  if (p.area) parts.push('📍 ' + p.area);
+  if (p.sqft) parts.push(p.sqft + ' sqft');
+  if (p.furnishing) parts.push(p.furnishing);
+  if (p.floor) parts.push('Floor ' + p.floor);
+  sub.textContent = parts.join('  |  ');
+  body.appendChild(sub);
+
+  if (p.top_amenities && p.top_amenities.length > 0) {
+    const chips = document.createElement('div'); chips.className = 'pcard-chips';
+    p.top_amenities.slice(0, 5).forEach(a => {
+      const c = document.createElement('span'); c.className = 'chip'; c.textContent = a; chips.appendChild(c);
+    });
+    body.appendChild(chips);
   }
 
-  function appendRich(text, cls) {
-    const el = document.createElement('div');
-    el.className = 'msg ' + cls;
-    // Extract image URLs (https://...jpg/png/webp)
-    const imgRegex = /https?:\\/\\/[^\\s]+\\.(?:jpg|jpeg|png|webp)(?:\\?[^\\s]*)*/gi;
-    const urls = text.match(imgRegex) || [];
-    const cleanText = text.replace(imgRegex, '').trim();
-    // Simple markdown: **bold**, * list, newlines
-    el.innerHTML = cleanText
-      .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
-      .replace(/^\\* (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\\/li>)/s, '<ul>$1</ul>')
-      .replace(/\\n/g, '<br>');
-    if (urls.length > 0) {
-      const gallery = document.createElement('div');
-      gallery.className = 'prop-images';
-      urls.forEach(url => {
-        const img = document.createElement('img');
-        img.src = url;
-        img.alt = 'Property photo';
-        img.onclick = () => {
-          document.getElementById('lightbox-img').src = url;
-          document.getElementById('lightbox').style.display = 'flex';
-        };
-        gallery.appendChild(img);
-      });
-      el.appendChild(gallery);
+  if (p.connectivity && Object.keys(p.connectivity).length > 0) {
+    const conn = document.createElement('div'); conn.className = 'pcard-conn';
+    Object.entries(p.connectivity).slice(0, 4).forEach(([k, v]) => {
+      const s = document.createElement('span'); s.textContent = '📍' + k + ' ' + v; conn.appendChild(s);
+    });
+    body.appendChild(conn);
+  }
+
+  // Action buttons: Visit + Save
+  const actions = document.createElement('div'); actions.className = 'pcard-actions';
+
+  const visitBtn = document.createElement('button');
+  visitBtn.className = 'btn-visit';
+  visitBtn.textContent = 'Book Site Visit';
+  visitBtn.onclick = () => { inp.value = 'I want to visit property ' + num; send(); };
+
+  const isSaved = savedIds.has(p.id);
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-save' + (isSaved ? ' saved' : '');
+  saveBtn.textContent = isSaved ? '❤️ Saved' : '🤍 Save';
+  saveBtn.dataset.id = p.id;
+  saveBtn.onclick = () => toggleSave(p.id, saveBtn);
+
+  actions.appendChild(visitBtn);
+  actions.appendChild(saveBtn);
+  body.appendChild(actions);
+  card.appendChild(body);
+  return card;
+}
+
+async function toggleSave(propertyId, btn) {
+  const alreadySaved = savedIds.has(propertyId);
+  btn.disabled = true;
+  try {
+    const method = alreadySaved ? 'DELETE' : 'POST';
+    const res = await fetch('/shortlist', {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: SID, property_id: propertyId }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      if (alreadySaved) {
+        savedIds.delete(propertyId);
+        btn.textContent = '🤍 Save';
+        btn.classList.remove('saved');
+      } else {
+        savedIds.add(propertyId);
+        btn.textContent = '❤️ Saved';
+        btn.classList.add('saved');
+      }
+      localStorage.setItem('riya_saved', JSON.stringify([...savedIds]));
+      updateSlCount();
     }
-    messagesEl.appendChild(el);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return el;
+  } catch (e) {
+    console.error('Save error:', e);
+  } finally {
+    btn.disabled = false;
   }
+}
+
+function updateSlCount() {
+  const n = savedIds.size;
+  slCount.textContent = n;
+  slCount.style.display = n > 0 ? 'inline-block' : 'none';
+}
+
+async function openShortlist() {
+  document.getElementById('sl-panel').style.display = 'flex';
+  const container = document.getElementById('sl-cards');
+  container.innerHTML = '<p style="color:#888;font-size:14px">Loading...</p>';
+  try {
+    const res = await fetch('/shortlist/' + SID);
+    const data = await res.json();
+    container.innerHTML = '';
+    if (!data.properties || data.properties.length === 0) {
+      container.innerHTML = '<p style="color:#888;font-size:14px">No saved properties yet. Click "🤍 Save" on any property card!</p>';
+      return;
+    }
+    data.properties.forEach((p, i) => container.appendChild(buildCard(p, i + 1)));
+  } catch (e) {
+    container.innerHTML = '<p style="color:#c00;font-size:14px">Could not load saved properties.</p>';
+  }
+}
+
+function closeShortlist() {
+  document.getElementById('sl-panel').style.display = 'none';
+}
 </script>
 </body>
 </html>"""
@@ -400,33 +742,26 @@ async def health():
 
 @app.post("/webhook/telegram")
 async def telegram_webhook(request: Request):
-    """
-    Receives Telegram updates when the bot runs in webhook mode (hosted).
-    Set with: POST https://api.telegram.org/bot<TOKEN>/setWebhook?url=<PUBLIC_URL>/webhook/telegram
-    """
     try:
         from telegram import Update
         from telegram.ext import Application
-        import json
-
         token = os.environ.get("TELEGRAM_BOT_TOKEN")
         if not token:
             raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
 
         body = await request.json()
-        # Process update via the shared bot application
         app_tg = Application.builder().token(token).build()
-        # Register handlers (same as polling bot)
         from interfaces.telegram_bot import (
             start, help_cmd, reset, profile_cmd, skip,
-            handle_message, handle_voice, button_callback,
+            handle_message, handle_voice, button_callback, shortlist_cmd,
         )
         from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
-        app_tg.add_handler(CommandHandler("start",   start))
-        app_tg.add_handler(CommandHandler("help",    help_cmd))
-        app_tg.add_handler(CommandHandler("reset",   reset))
-        app_tg.add_handler(CommandHandler("profile", profile_cmd))
-        app_tg.add_handler(CommandHandler("skip",    skip))
+        app_tg.add_handler(CommandHandler("start",     start))
+        app_tg.add_handler(CommandHandler("help",      help_cmd))
+        app_tg.add_handler(CommandHandler("reset",     reset))
+        app_tg.add_handler(CommandHandler("profile",   profile_cmd))
+        app_tg.add_handler(CommandHandler("skip",      skip))
+        app_tg.add_handler(CommandHandler("shortlist", shortlist_cmd))
         app_tg.add_handler(MessageHandler(filters.VOICE, handle_voice))
         app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         app_tg.add_handler(CallbackQueryHandler(button_callback))
@@ -441,11 +776,10 @@ async def telegram_webhook(request: Request):
         return {"ok": False}
 
 
-# ── WhatsApp webhook (inbound messages) ───────────────────────────────────────
+# ── WhatsApp webhook ───────────────────────────────────────────────────────────
 
 @app.get("/webhook/whatsapp")
 async def whatsapp_verify(request: Request):
-    """Meta calls this GET to verify the webhook. Must return hub.challenge."""
     params = dict(request.query_params)
     verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "realestate_webhook_2026")
     if params.get("hub.verify_token") == verify_token:
@@ -455,20 +789,16 @@ async def whatsapp_verify(request: Request):
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
-    """
-    Receives inbound WhatsApp messages from Meta.
-    Passes them through the same AI agent as Telegram/web.
-    """
     try:
         body = await request.json()
-        entry = body.get("entry", [{}])[0]
+        entry   = body.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
-        value = changes.get("value", {})
+        value   = changes.get("value", {})
         messages = value.get("messages", [])
 
         for msg in messages:
             msg_type = msg.get("type")
-            sender   = msg.get("from")   # e.g. "919936659513"
+            sender   = msg.get("from")
             session_id = f"wa_{sender}"
 
             if msg_type == "text":
@@ -479,14 +809,13 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
         return {"ok": True}
     except Exception as e:
         logger.error(f"WhatsApp inbound error: {e}")
-        return {"ok": True}  # always 200 to Meta or it retries
+        return {"ok": True}
 
 
 async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str):
-    """Process inbound WhatsApp message and send reply."""
     from notifications.whatsapp_notifier import _send
     try:
-        reply = process_message(session_id=session_id, user_message=text, platform="whatsapp")
-        _send(sender_phone, reply)
+        result = process_message(session_id=session_id, user_message=text, platform="whatsapp")
+        _send(sender_phone, result["reply"])
     except Exception as e:
         logger.error(f"WhatsApp reply failed: {e}")
