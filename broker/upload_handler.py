@@ -214,6 +214,33 @@ def process_csv(filepath: str, broker_id: str | None = None) -> dict:
     return results
 
 
+def create_property_from_fields(fields: dict, broker_id: str | None = None) -> dict:
+    """
+    Add ONE property from broker form fields (same pipeline as a CSV row).
+    Returns {ok, property_id, doc_id, area, error}. Used by the broker 'Add property' UI.
+    `fields` keys mirror the CSV columns: property_type, bhk, price_inr, area_sqft,
+    furnishing, address, city, amenities, broker_name, broker_phone, description, etc.
+    """
+    errors = validate_row(fields, 1)
+    if errors:
+        return {"ok": False, "error": "; ".join(errors)}
+    try:
+        prop = normalize_row(fields, broker_id)
+        prop = enrich_property(prop)
+        semantic_text = build_semantic_text(prop)
+        embedding = embed_text(semantic_text)
+        upsert_property(prop, semantic_text, embedding)
+        return {
+            "ok": True,
+            "property_id": prop["doc_id"],          # this is the DB row id ("rag_property_BROKER_XXXX")
+            "internal_id": prop["source_ids"]["property_id"],
+            "area": prop["location"].get("area_name"),
+        }
+    except Exception as e:
+        logger.error(f"create_property_from_fields failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 def _safe_int(val) -> int | None:
     try:
         return int(float(str(val))) if val not in (None, "", "nan") else None

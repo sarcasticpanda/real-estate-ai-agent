@@ -147,7 +147,7 @@ language sql stable as $$
     and (filter_bhk   is null or p.bhk        = filter_bhk)
     and (filter_max_price is null or p.price_inr <= filter_max_price)
     and (filter_min_price is null or p.price_inr >= filter_min_price)
-    and (filter_area  is null or p.area_name ilike '%' || filter_area || '%')
+    and (filter_area  is null or replace(p.area_name, ' ', '') ilike '%' || filter_area || '%')
     and 1 - (p.embedding <=> query_embedding) > match_threshold
   order by p.embedding <=> query_embedding
   limit match_count;

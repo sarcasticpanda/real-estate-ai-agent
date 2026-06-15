@@ -36,10 +36,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent.property_agent import process_message
-from broker.upload_handler import process_csv
+from broker.upload_handler import process_csv, create_property_from_fields
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
+    upload_property_document, add_document_to_property, get_property_documents,
     get_session, save_session, get_all_leads, mark_property_booked,
 )
 
@@ -814,6 +815,63 @@ async def broker_dashboard():
     return _BROKER_HTML
 
 
+# ── Broker: add a single property + upload images & documents ────────────────
+
+class NewProperty(BaseModel):
+    token: str
+    property_type: str
+    bhk: int | None = None
+    price_inr: int
+    area_sqft: float | None = None
+    furnishing: str | None = None
+    address: str
+    city: str = "Lucknow"
+    amenities: str | None = None          # comma-separated
+    broker_name: str | None = None
+    broker_phone: str | None = None
+    description: str | None = None
+
+
+@app.post("/broker/property")
+async def broker_add_property(req: NewProperty):
+    """Add ONE property via the broker form (normalize → geocode → enrich → embed → store)."""
+    _check_broker_token(req.token)
+    fields = req.model_dump(exclude={"token"})
+    result = create_property_from_fields(fields, broker_id=req.broker_name or "broker_ui")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Could not add property"))
+    return result
+
+
+@app.post("/broker/properties/{property_id}/documents")
+async def broker_upload_document(property_id: str, token: str = Form(...),
+                                 label: str = Form("Document"), file: UploadFile = File(...)):
+    """Attach a document (PDF/image) — floor plan, brochure, papers — to a property."""
+    _check_broker_token(token)
+    ct = file.content_type or "application/pdf"
+    allowed = {"application/pdf", "image/jpeg", "image/png", "image/webp"}
+    if ct not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported document type: {ct}. Use PDF/JPEG/PNG.")
+    file_bytes = await file.read()
+    if len(file_bytes) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Document too large — max 15 MB")
+    url = upload_property_document(property_id, file.filename or "document", file_bytes, ct)
+    if not url:
+        raise HTTPException(status_code=500, detail="Upload failed — check 'property-documents' Storage bucket exists")
+    add_document_to_property(property_id, url, label)
+    return {"ok": True, "property_id": property_id, "document_url": url, "label": label}
+
+
+@app.get("/broker/properties/{property_id}/documents")
+async def broker_list_documents(property_id: str):
+    return {"property_id": property_id, "documents": get_property_documents(property_id)}
+
+
+@app.get("/broker/add", response_class=HTMLResponse)
+async def broker_add_page():
+    return _BROKER_ADD_HTML
+
+
 _BROKER_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Broker Dashboard — Riya</title>
@@ -837,7 +895,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:1
 .empty{color:#64748b;text-align:center;padding:40px}
 a.call{color:#0f766e;text-decoration:none;font-weight:600}
 </style></head><body>
-<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline</div>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline · <a href="/broker/add">+ Add a property</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
   <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
@@ -878,6 +936,99 @@ async function setStatus(id,status){
   if(r.ok){load();}else{alert('Update failed');}
 }
 window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}};
+</script></body></html>"""
+
+
+_BROKER_ADD_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add Property — Riya Broker</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:18px;max-width:680px;margin:auto}
+h1{font-size:20px;color:#1d4ed8}.sub{color:#64748b;font-size:13px;margin-bottom:16px}
+.box{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:12px;font-weight:600;color:#475569;margin:8px 0 3px}
+input,select,textarea{width:100%;padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
+.row{display:flex;gap:10px}.row>div{flex:1}
+button{cursor:pointer;border:none;border-radius:8px;padding:10px 14px;font-size:14px;font-weight:700;background:#1d4ed8;color:#fff;margin-top:12px}
+button.sec{background:#0f766e}
+.muted{color:#64748b;font-size:12px}.ok{color:#166534;font-weight:600}.err{color:#991b1b;font-weight:600}
+#step2,#step3{display:none}.drop{border:2px dashed #cbd5e1;border-radius:10px;padding:18px;text-align:center;color:#64748b;cursor:pointer}
+.thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.thumbs img{width:70px;height:70px;object-fit:cover;border-radius:8px}
+.doc{font-size:13px;color:#0f766e;margin-top:6px}
+a{color:#1d4ed8}
+</style></head><body>
+<h1>Add a Property</h1><div class="sub">Riya Broker · <a href="/broker">← leads dashboard</a></div>
+
+<div class="box" id="step1">
+  <label>Broker token</label><input id="tok" type="password" placeholder="token">
+  <div class="row"><div><label>Type *</label>
+    <select id="property_type"><option>Flat</option><option>Independent House</option><option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option></select></div>
+    <div><label>BHK</label><input id="bhk" type="number" min="0" placeholder="2"></div>
+    <div><label>Price (₹) *</label><input id="price_inr" type="number" placeholder="5000000"></div></div>
+  <div class="row"><div><label>Area (sqft)</label><input id="area_sqft" type="number" placeholder="1100"></div>
+    <div><label>Furnishing</label><select id="furnishing"><option value="">—</option><option>Furnished</option><option>Semi-Furnished</option><option>Unfurnished</option></select></div></div>
+  <label>Address / locality *</label><input id="address" placeholder="Gomti Nagar, near Phoenix Palassio">
+  <label>Amenities (comma-separated)</label><input id="amenities" placeholder="Lift, Power Backup, Parking, Gym">
+  <div class="row"><div><label>Your name</label><input id="broker_name" placeholder="Broker name"></div>
+    <div><label>Your phone</label><input id="broker_phone" placeholder="98XXXXXXXX"></div></div>
+  <label>Description</label><textarea id="description" rows="2" placeholder="Optional notes"></textarea>
+  <button onclick="addProp()">Add property →</button>
+  <div id="m1" class="muted" style="margin-top:8px"></div>
+</div>
+
+<div class="box" id="step2">
+  <h1 style="font-size:16px">Photos</h1>
+  <div class="muted">Property added. Now add photos (optional).</div>
+  <div class="drop" onclick="document.getElementById('imgs').click()">Click to choose photos (JPG/PNG)</div>
+  <input id="imgs" type="file" accept="image/*" multiple style="display:none" onchange="upImgs()">
+  <div class="thumbs" id="thumbs"></div>
+</div>
+
+<div class="box" id="step3">
+  <h1 style="font-size:16px">Documents</h1>
+  <div class="muted">Floor plan, brochure, ownership papers, RERA cert (PDF/JPG).</div>
+  <label>Label</label><input id="doclabel" placeholder="Floor plan">
+  <div class="drop" onclick="document.getElementById('docs').click()">Click to choose a document</div>
+  <input id="docs" type="file" accept="application/pdf,image/*" style="display:none" onchange="upDoc()">
+  <div id="doclist"></div>
+  <button class="sec" onclick="location.reload()">Done — add another</button>
+</div>
+
+<script>
+let PID=null;
+function v(id){return document.getElementById(id).value.trim();}
+function tok(){return v('tok');}
+async function addProp(){
+  const m=document.getElementById('m1');m.textContent='Adding… (geocoding + indexing, ~3s)';m.className='muted';
+  const body={token:tok(),property_type:v('property_type'),bhk:parseInt(v('bhk'))||null,price_inr:parseInt(v('price_inr'))||0,
+    area_sqft:parseFloat(v('area_sqft'))||null,furnishing:v('furnishing')||null,address:v('address'),
+    amenities:v('amenities')||null,broker_name:v('broker_name')||null,broker_phone:v('broker_phone')||null,description:v('description')||null};
+  if(!body.address||!body.price_inr){m.textContent='Address and price are required.';m.className='err';return;}
+  const r=await fetch('/broker/property',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!r.ok){m.textContent='Error: '+(d.detail||'failed');m.className='err';return;}
+  PID=d.property_id;localStorage.setItem('btok',tok());
+  m.innerHTML='<span class="ok">✓ Added in '+(d.area||'Lucknow')+'</span> (id '+PID+')';
+  document.getElementById('step2').style.display='block';document.getElementById('step3').style.display='block';
+  window.scrollTo(0,document.body.scrollHeight);
+}
+async function upImgs(){
+  const files=document.getElementById('imgs').files;const t=document.getElementById('thumbs');
+  for(const f of files){
+    const fd=new FormData();fd.append('file',f);
+    const r=await fetch('/properties/'+PID+'/images',{method:'POST',body:fd});
+    if(r.ok){const d=await r.json();const im=document.createElement('img');im.src=d.image_url;t.appendChild(im);}
+  }
+}
+async function upDoc(){
+  const f=document.getElementById('docs').files[0];if(!f)return;
+  const fd=new FormData();fd.append('file',f);fd.append('token',tok());fd.append('label',v('doclabel')||f.name);
+  const r=await fetch('/broker/properties/'+PID+'/documents',{method:'POST',body:fd});
+  const dl=document.getElementById('doclist');
+  if(r.ok){const d=await r.json();dl.innerHTML+='<div class="doc">📄 <a href="'+d.document_url+'" target="_blank">'+d.label+'</a></div>';}
+  else{const e=await r.json();dl.innerHTML+='<div class="err">'+(e.detail||'upload failed')+'</div>';}
+}
+window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;};
 </script></body></html>"""
 
 
