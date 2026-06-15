@@ -114,6 +114,15 @@ def get_leads_for_broker(broker_id: str, status: str | None = None) -> list[dict
     return q.execute().data or []
 
 
+def get_all_leads(status: str | None = None, limit: int = 200) -> list[dict]:
+    """All leads, newest first — for the broker dashboard (leads may have no broker_id)."""
+    client = get_client()
+    q = client.table("leads").select("*").order("created_at", desc=True).limit(limit)
+    if status and status != "all":
+        q = q.eq("status", status)
+    return q.execute().data or []
+
+
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
 def get_session(session_id: str) -> dict:

@@ -40,7 +40,7 @@ from broker.upload_handler import process_csv
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
-    get_session, save_session,
+    get_session, save_session, get_all_leads, mark_property_booked,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -750,6 +750,135 @@ function closeShortlist() {
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── Broker dashboard ─────────────────────────────────────────────────────────
+# Lightweight, free: JSON endpoints + one static HTML page. Protected by a shared
+# token (set BROKER_TOKEN in .env; defaults to "broker" for local use).
+
+def _broker_token() -> str:
+    return os.environ.get("BROKER_TOKEN", "broker")
+
+
+def _check_broker_token(token: str | None):
+    if token != _broker_token():
+        raise HTTPException(status_code=401, detail="Invalid broker token")
+
+
+@app.get("/broker/leads")
+async def broker_leads(token: str, status: str = "all"):
+    """All leads for the dashboard (newest first). status: all|new|contacted|visit|converted."""
+    _check_broker_token(token)
+    try:
+        return {"leads": get_all_leads(status=status)}
+    except Exception as e:
+        logger.error(f"broker_leads error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class LeadStatusUpdate(BaseModel):
+    token: str
+    status: str
+    notes: str | None = None
+
+
+@app.post("/broker/leads/{lead_id}/status")
+async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
+    _check_broker_token(req.token)
+    try:
+        update_lead_status(lead_id, req.status, req.notes)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"broker_update_lead error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PropertySold(BaseModel):
+    token: str
+
+
+@app.post("/broker/properties/{property_id}/sold")
+async def broker_mark_sold(property_id: str, req: PropertySold):
+    """Mark a property booked/sold so the bot stops recommending it."""
+    _check_broker_token(req.token)
+    try:
+        mark_property_booked(property_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"broker_mark_sold error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/broker", response_class=HTMLResponse)
+async def broker_dashboard():
+    return _BROKER_HTML
+
+
+_BROKER_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Broker Dashboard — Riya</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:18px}
+h1{font-size:20px;color:#1d4ed8;margin-bottom:2px}.sub{color:#64748b;font-size:13px;margin-bottom:16px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.bar input{padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
+.bar select{padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px}
+button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600}
+.btn-load{background:#1d4ed8;color:#fff}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.name{font-weight:700;font-size:16px}.phone{color:#0f766e;font-weight:600}
+.meta{color:#475569;font-size:13px;margin-top:4px;line-height:1.6}
+.pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;text-transform:capitalize}
+.s-new{background:#dbeafe;color:#1e40af}.s-contacted{background:#fef9c3;color:#854d0e}.s-visit{background:#e9d5ff;color:#6b21a8}.s-converted{background:#dcfce7;color:#166534}.s-lost{background:#fee2e2;color:#991b1b}
+.actions{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
+.actions button{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0}
+.actions button:hover{background:#e2e8f0}
+.empty{color:#64748b;text-align:center;padding:40px}
+a.call{color:#0f766e;text-decoration:none;font-weight:600}
+</style></head><body>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline</div>
+<div class="bar">
+  <input id="tok" placeholder="Broker token" type="password">
+  <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
+  <button class="btn-load" onclick="load()">Load leads</button>
+  <span id="count" style="color:#64748b;font-size:13px"></span>
+</div>
+<div id="list"></div>
+<script>
+const STATUSES=['new','contacted','visit','converted','lost'];
+function tok(){return document.getElementById('tok').value.trim();}
+async function load(){
+  const t=tok(); if(!t){alert('Enter the broker token');return;}
+  const f=document.getElementById('flt').value;
+  localStorage.setItem('btok',t);
+  const r=await fetch(`/broker/leads?token=${encodeURIComponent(t)}&status=${f}`);
+  if(!r.ok){document.getElementById('list').innerHTML='<div class="empty">Unauthorized or error.</div>';return;}
+  const d=await r.json();const leads=d.leads||[];
+  document.getElementById('count').textContent=leads.length+' lead'+(leads.length==1?'':'s');
+  const el=document.getElementById('list');
+  if(!leads.length){el.innerHTML='<div class="empty">No leads yet.</div>';return;}
+  el.innerHTML='';
+  leads.forEach(L=>{
+    const bud=(L.budget_max?('₹'+(L.budget_max/100000).toFixed(0)+'L'):'—');
+    const when=L.created_at?new Date(L.created_at).toLocaleString():'';
+    const st=(L.status||'new').toLowerCase();
+    const card=document.createElement('div');card.className='card';
+    card.innerHTML=`<div class="top">
+        <div><div class="name">${L.name||'(no name)'} · <a class="call" href="tel:${L.phone||''}">${L.phone||'—'}</a></div>
+          <div class="meta">${L.preferred_bhk?L.preferred_bhk+' BHK · ':''}${L.preferred_area||L.preferred_city||''} · budget ${bud}<br>
+          ${L.interested_property_id?('🏠 '+L.interested_property_id):'<i>no property attached</i>'} · <span style="color:#94a3b8">${when}</span></div>
+        </div><span class="pill s-${st}">${st}</span></div>
+      <div class="actions">${STATUSES.map(s=>`<button onclick="setStatus('${L.id}','${s}')">${s}</button>`).join('')}</div>`;
+    el.appendChild(card);
+  });
+}
+async function setStatus(id,status){
+  const r=await fetch(`/broker/leads/${id}/status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status})});
+  if(r.ok){load();}else{alert('Update failed');}
+}
+window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}};
+</script></body></html>"""
 
 
 # ── Telegram webhook (production mode) ───────────────────────────────────────
