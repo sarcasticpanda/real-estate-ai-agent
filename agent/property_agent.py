@@ -32,7 +32,8 @@ from rag.prompts import (
     SYSTEM_PROMPT, SYSTEM_PROMPT_NAMED,
     PROPERTY_RECOMMENDATION_PROMPT, LEAD_CAPTURE_PROMPT,
     NO_RESULTS_PROMPT, SOFT_INTEREST_PROMPT, CLARIFY_PROMPT,
-    LEAD_SAVED_TEMPLATE,
+    LEAD_SAVED_TEMPLATE, ASK_VISIT_TIME_TEMPLATE, VISIT_SCHEDULED_TEMPLATE,
+    VISIT_SKIP_TEMPLATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -451,6 +452,10 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             conv.set_stage("discovery")  # escape hatch
         else:
             return _handle_lead_capture(conv, user_message, user_name), []
+
+    # ── Stage: collecting a preferred visit time ─────────────────────────────
+    if conv.stage == "scheduling":
+        return _handle_scheduling(conv, user_message, user_name), []
 
     # ── After completed lead, allow new search (post_lead cooldown) ──────────
     if conv.stage in ("done", "post_lead"):
@@ -951,9 +956,16 @@ def _handle_lead_capture(
             profile["name"] = name
             profile["phone"] = phone
             conv.requirements["_profile"] = profile
-            conv.set_stage("post_lead")
-            conv.requirements["_post_lead_turns"] = 3
-            return LEAD_SAVED_TEMPLATE.format(name=name, phone=phone)
+            # Move into scheduling: collect a preferred visit time so the broker can
+            # confirm an actual slot (a real meeting record), not just "we'll call you".
+            conv.requirements["_pending_meeting"] = {
+                "lead_id": lead.get("id"),
+                "property_id": conv.requirements.get("_liked_property_id"),
+                "phone": phone,
+                "name": name,
+            }
+            conv.set_stage("scheduling")
+            return ASK_VISIT_TIME_TEMPLATE.format(name=name)
         else:
             return "Apologies, something went wrong. Could you share your name and number once more?"
 
@@ -970,6 +982,105 @@ def _handle_lead_capture(
         ),
     })
     return _llm(messages, temperature=0.5, max_tokens=120)
+
+
+_SKIP_VISIT_RE = re.compile(r"^\s*(skip|later|not now|no thanks?|nah|call me|you call|whenever|"
+                            r"any ?time|flexible|don'?t know|not sure)\b", re.IGNORECASE)
+
+
+def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: str | None) -> str:
+    """Collect the buyer's preferred visit time and create a real meeting record."""
+    from database.supabase_client import save_meeting
+    pending = conv.requirements.get("_pending_meeting") or {}
+    name = pending.get("name") or user_name or "there"
+    phone = pending.get("phone", "")
+
+    def _finish():
+        conv.set_stage("post_lead")
+        conv.requirements["_post_lead_turns"] = 3
+        conv.requirements.pop("_pending_meeting", None)
+
+    if _SKIP_VISIT_RE.match(user_message.strip()):
+        _finish()
+        return VISIT_SKIP_TEMPLATE.format(name=name, phone=phone)
+
+    dt, when = _parse_visit_time(user_message)
+    meeting = {
+        "lead_id": pending.get("lead_id"),
+        "property_id": pending.get("property_id"),
+        "status": "pending",
+        "notes": f"Buyer requested visit: {user_message.strip()[:200]}",
+    }
+    if dt:
+        meeting["scheduled_at"] = dt.isoformat()
+    try:
+        save_meeting(meeting)
+    except Exception as e:
+        logger.error(f"save_meeting failed: {e}")
+
+    _finish()
+    property_part = " for the property you liked" if pending.get("property_id") else ""
+    return VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
+
+
+def _parse_visit_time(text: str):
+    """
+    Best-effort, no-LLM parse of "this Saturday morning" / "tomorrow 5pm" etc.
+    Returns (datetime | None, human_display_str). Falls back to the raw text when
+    a concrete date/time can't be pinned (the broker confirms the exact slot anyway).
+    """
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    t = text.lower()
+    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+    base = None
+    if "day after tomorrow" in t:
+        base = now + timedelta(days=2)
+    elif "tomorrow" in t:
+        base = now + timedelta(days=1)
+    elif "today" in t or "tonight" in t:
+        base = now
+    else:
+        for i, wd in enumerate(weekdays):
+            if wd in t:
+                ahead = (i - now.weekday()) % 7
+                if ahead == 0:
+                    ahead = 7  # "saturday" → the next one, not today
+                base = now + timedelta(days=ahead)
+                break
+
+    hour = minute = None
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", t)
+    if m:
+        hour = int(m.group(1)) % 12
+        if m.group(3) == "pm":
+            hour += 12
+        minute = int(m.group(2) or 0)
+    elif "morning" in t:
+        hour, minute = 10, 0
+    elif "afternoon" in t:
+        hour, minute = 15, 0
+    elif "evening" in t:
+        hour, minute = 18, 0
+    elif "night" in t:
+        hour, minute = 19, 0
+
+    if base is not None:
+        h = hour if hour is not None else 11
+        mn = minute if minute is not None else 0
+        dt = base.replace(hour=h, minute=mn, second=0, microsecond=0)
+        if dt < now:
+            dt = dt + timedelta(days=1)
+        return dt, _fmt_visit(dt)
+    return None, text.strip()
+
+
+def _fmt_visit(dt) -> str:
+    h12 = dt.hour % 12 or 12
+    ap = "am" if dt.hour < 12 else "pm"
+    mm = f":{dt.minute:02d}" if dt.minute else ""
+    return dt.strftime("%A, %d %b") + f" at {h12}{mm} {ap}"
 
 
 def _ask_for_contact(conv: ConversationManager, user_name: str | None) -> str:

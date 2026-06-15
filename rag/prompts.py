@@ -202,6 +202,25 @@ LEAD_SAVED_TEMPLATE = (
     "Feel free to ask if you have any more questions — I'm always here!"
 )
 
+# ── Visit scheduling ──────────────────────────────────────────────────────────
+
+ASK_VISIT_TIME_TEMPLATE = (
+    "Thank you, {name}! 🎉 I've shared your details with our consultant. "
+    "When would suit you for a visit? Just tell me a day and rough time — like "
+    "\"this Saturday morning\" or \"tomorrow around 5 pm\". "
+    "(Or type _skip_ and they'll call you to arrange it.)"
+)
+
+VISIT_SCHEDULED_TEMPLATE = (
+    "Perfect, {name} — I've noted *{when}*{property_part}. Our consultant will confirm "
+    "and call you at {phone} to finalise it. Anything else I can help you with?"
+)
+
+VISIT_SKIP_TEMPLATE = (
+    "No problem, {name}! Our consultant will call you at {phone} to find a time that "
+    "works for you. Is there anything else you'd like to explore in the meantime?"
+)
+
 # ── Clarifying question ───────────────────────────────────────────────────────
 
 CLARIFY_PROMPT = """Buyer said: "{message}"

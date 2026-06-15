@@ -79,7 +79,7 @@ class ConversationManager:
         self.requirements = merge_requirements(self.requirements, new_requirements)
 
     def set_stage(self, stage: str) -> None:
-        valid_stages = {"discovery", "recommending", "lead_capture", "done", "post_lead"}
+        valid_stages = {"discovery", "recommending", "lead_capture", "scheduling", "done", "post_lead"}
         if stage in valid_stages:
             self.stage = stage
         else:
