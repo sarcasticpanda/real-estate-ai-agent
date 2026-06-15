@@ -86,13 +86,15 @@ _ACTION_RE = re.compile(
 # "how far is it from X" / "what's the distance"
 _COMPARE_RE = re.compile(
     r"\b(compare|difference between|vs\.?|versus|"
-    r"which (is|one is|one|are)?\s*(better|best|good|cheaper|cheapest|cheap|"
-    r"bigger|biggest|larger|largest|smaller|expensive|nicer|closer|newer)|"
+    # superlatives/comparatives, allowing "which is THE biggest", "what's the cheapest"
+    r"(which|what'?s?|which one'?s?)\s*(is|one is|one|are|the)?\s*(the\s+)?"
+    r"(better|best|good|cheaper|cheapest|cheap|biggest|bigger|largest|larger|"
+    r"smallest|smaller|most expensive|expensive|nicest|nicer|closest|closer|newest|newer)|"
     r"how far|how close|what'?s? the distance|distance (from|to)|approx\w* dist\w*|"
     r"dist\w* from|km from|far is it|far from|how many km|"
-    r"tell me (more )?about (property |option |number |the )?(\d|first|second|third)|"
-    r"more (details?|info) (on|about) (property |option |number |the )?(\d|first|second|third)|"
-    r"property \d|option \d|(first|second|third) one)\b",
+    r"tell me (more )?about (property |option |number |the )?(\d|first|second|third|last)|"
+    r"more (details?|info) (on|about) (property |option |number |the )?(\d|first|second|third|last)|"
+    r"property \d|option \d|(first|second|third|last) one)\b",
     re.IGNORECASE,
 )
 
@@ -140,14 +142,13 @@ _VAGUE_ANY_RE = re.compile(
 )
 
 # "any BHK" / "doesn't matter" — clear BHK + property_type filters
+# ONLY explicit BHK/type-clearing phrases. Generic vague replies ("any is fine",
+# "doesn't matter", "you decide") are handled context-aware by _VAGUE_ANY_RE so they
+# clear the slot actually being asked about — not an already-specified BHK.
 _ANY_BHK_RE = re.compile(
-    r"\b(any bhk|any type|not.{0,8}(specific|particular).{0,8}bhk|bhk.{0,10}doesn'?t matter|"
-    r"any flat|any house|any property|any configuration|don'?t care.{0,10}bhk|"
-    r"not.{0,5}(2|3|4) bhk|whatever type|any size|"
-    r"any.{0,8}(would|will|is|are)?.{0,5}(work|fine|good|ok|okay|do)|"
-    r"anything.{0,6}(works?|fine|good|ok)|doesn'?t matter|"
-    r"no preference|whatever.{0,6}(works?|you have|is available)|"
-    r"(you|u).{0,6}(decide|choose|suggest|recommend)|open to any)\b",
+    r"\b(any bhk|any type|any flat|any house|any property|any configuration|any size|"
+    r"whatever type|not.{0,8}(specific|particular).{0,8}bhk|bhk.{0,10}doesn'?t matter|"
+    r"don'?t care.{0,10}bhk|not.{0,5}(2|3|4) bhk)\b",
     re.IGNORECASE,
 )
 
@@ -189,6 +190,37 @@ def _grounded_in_message(value: str | None, message: str) -> bool:
     if not value:
         return False
     return value.lower().replace(" ", "") in message.lower().replace(" ", "")
+
+
+_ORDINAL_MAP = {
+    "first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3,
+    "fourth": 4, "4th": 4, "fifth": 5, "5th": 5, "last": -1,
+}
+_PROP_NUM_RE = re.compile(r"\b(?:property|option|number|no\.?|#|card|the)\s*(\d)\b", re.IGNORECASE)
+_ORDINAL_RE = re.compile(r"\b(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|last)\b", re.IGNORECASE)
+
+
+def _resolve_referenced_property_id(user_message: str, conv: ConversationManager) -> str | None:
+    """
+    Figure out which already-shown property the user is referring to
+    ("the first one", "property 2", "book #3", "the last one"). Returns its id or None.
+    """
+    cards = conv.requirements.get("_last_shown_cards") or []
+    if not cards:
+        return None
+    idx = None
+    m = _PROP_NUM_RE.search(user_message)
+    if m:
+        idx = int(m.group(1))
+    else:
+        m2 = _ORDINAL_RE.search(user_message)
+        if m2:
+            idx = _ORDINAL_MAP.get(m2.group(1).lower())
+    if idx == -1:
+        return cards[-1].get("id")
+    if idx and 1 <= idx <= len(cards):
+        return cards[idx - 1].get("id")
+    return None
 
 
 def _resolve_location_switch(
@@ -556,6 +588,15 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
 
     # ── Strong intent -> move to lead capture ─────────────────────────────────
     if lead_level == "strong":
+        # Capture WHICH property they want before collecting contact, so the broker
+        # gets a lead with the actual listing attached (not None).
+        ref = _resolve_referenced_property_id(user_message, conv)
+        if ref:
+            conv.requirements["_liked_property_id"] = ref
+        elif not conv.requirements.get("_liked_property_id"):
+            cards = conv.requirements.get("_last_shown_cards") or []
+            if cards:
+                conv.requirements["_liked_property_id"] = cards[0].get("id", "")
         conv.set_stage("lead_capture")
         return _ask_for_contact(conv, user_name), []
 
@@ -817,7 +858,10 @@ def _recommend(
     messages.append({"role": "user", "content": user_prompt})
     reply = _llm(messages, max_tokens=300)
 
-    if lead_level == "soft" and properties:
+    # Track the top result as the default "interested" property every time we show
+    # results, so a later "book a visit" always has a property to attach to the lead.
+    # A specific pick (soft interest, or "tell me about #3") overrides this below/elsewhere.
+    if properties:
         conv.requirements["_liked_property_id"] = properties[0].get("id", "")
 
     rec_count = conv.get_recommendation_count()
@@ -1031,6 +1075,12 @@ def _compare_properties(
     "tell me about property 3") using the properties most recently shown.
     Grounded strictly in the stored property summary — never invents data.
     """
+    # If they singled out a specific property ("tell me about the 2nd one"), remember it
+    # as their interested property so a later "book a visit" attaches the right listing.
+    ref = _resolve_referenced_property_id(user_message, conv)
+    if ref:
+        conv.requirements["_liked_property_id"] = ref
+
     shown_text = conv.requirements.get("_last_shown_text", "")
     messages = [{"role": "system", "content": _sys(user_name)}]
     messages.append({
@@ -1046,6 +1096,10 @@ def _compare_properties(
             "drive may be a little more'). If they asked specifically for the 'exact' distance, give the "
             "precise number and mention it's a straight-line estimate. If no distance is listed, say you'd "
             "need to confirm it with our consultant.\n"
+            "- If they ask a SUPERLATIVE ('which is the biggest/largest/cheapest/most expensive/closest?'), "
+            "READ the figures in the summary and name the specific winner — e.g. biggest = highest sqft, "
+            "cheapest = lowest price — and give its number (e.g. 'The biggest is Property 3, a 3 BHK at 1464 "
+            "sqft'). Do not dodge the question.\n"
             "- If they're comparing, point out the key practical differences (price, size, BHK, location, "
             "standout amenity, proximity) and give a genuine recommendation.\n"
             "- If they want detail on one property, describe it warmly.\n"
