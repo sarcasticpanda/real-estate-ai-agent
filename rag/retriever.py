@@ -329,6 +329,20 @@ def to_card(r: dict) -> dict:
         card["landmark_name"] = lm_name.title()  # tidy display ("cms ..." → "Cms ...")
         card["landmark_distance_km"] = lm_dist
 
+    # Broker-uploaded documents (floor plan, brochure, papers) — shown to the buyer.
+    docs = data.get("documents") or []
+    if docs:
+        card["documents"] = [{"url": d.get("url"), "label": d.get("label", "Document")}
+                             for d in docs if d.get("url")]
+
+    # A map link the buyer can tap (uses exact coords if we have them, else the area).
+    lat, lng = conn.get("latitude"), conn.get("longitude")
+    if lat and lng:
+        card["map_url"] = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+    elif location.get("area_name"):
+        q = f"{location.get('area_name')}, {location.get('city', 'Lucknow')}".replace(" ", "+")
+        card["map_url"] = f"https://www.google.com/maps/search/?api=1&query={q}"
+
     return card
 
 

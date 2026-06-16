@@ -375,6 +375,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .pcard-conn{font-size:12px;color:#555;margin-bottom:12px;line-height:1.7}
 .pcard-conn span{margin-right:10px}
 .pcard-landmark{display:inline-block;font-size:12px;font-weight:600;color:#0a7d3c;background:#e6f7ee;border:1px solid #b6e6cb;border-radius:6px;padding:4px 9px;margin-bottom:10px}
+.pcard-links{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.pcard-links a{font-size:12px;font-weight:600;color:#1d4ed8;text-decoration:none;background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:4px 9px}
 .pcard-actions{display:flex;gap:8px}
 .btn-visit{flex:1;padding:10px;background:#1a73e8;color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
 .btn-visit:hover{background:#1558b0}
@@ -662,6 +664,20 @@ function buildCard(p, num) {
     });
     body.appendChild(conn);
   }
+
+  // Map + documents (floor plan / brochure / papers uploaded by the broker)
+  const links = document.createElement('div'); links.className = 'pcard-links';
+  if (p.map_url) {
+    const a = document.createElement('a'); a.href = p.map_url; a.target = '_blank';
+    a.textContent = '🗺️ View on map'; links.appendChild(a);
+  }
+  if (p.documents && p.documents.length) {
+    p.documents.forEach(d => {
+      const a = document.createElement('a'); a.href = d.url; a.target = '_blank';
+      a.textContent = '📄 ' + (d.label || 'Document'); links.appendChild(a);
+    });
+  }
+  if (links.children.length) body.appendChild(links);
 
   // Action buttons: Visit + Save
   const actions = document.createElement('div'); actions.className = 'pcard-actions';
