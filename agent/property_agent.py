@@ -75,6 +75,14 @@ _SHORTLIST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# EMI / home-loan questions
+_EMI_RE = re.compile(
+    r"\b(emi|e\.m\.i|home ?loan|loan|finance|financing|mortgage|down ?payment|"
+    r"monthly (payment|installment|instalment|cost)|per month|installments?|instalments?|"
+    r"interest rate|how much .{0,15}(per month|monthly))\b",
+    re.IGNORECASE,
+)
+
 # Strong action words — buyer wants to act NOW (visit/book), not just discuss
 _ACTION_RE = re.compile(
     r"\b(visit|book|schedule|arrange|contact|call me|broker|proceed|"
@@ -435,6 +443,10 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     # ── Shortlist request ─────────────────────────────────────────────────────
     if _SHORTLIST_RE.search(user_message):
         return _show_shortlist(conv, user_name)
+
+    # ── EMI / loan question ──────────────────────────────────────────────────
+    if _EMI_RE.search(user_message) and not conv.is_lead_capture_stage():
+        return _handle_emi(conv, user_name), conv.requirements.get("_last_shown_cards", [])
 
     # ── Compare / detail request about already-shown properties ───────────────
     # Only if we've shown properties AND the user isn't trying to act (visit/book) or
@@ -847,6 +859,11 @@ def _recommend(
         # Follow-up "how far is it?" questions read the distance from the stored cards.
         conv.requirements["named_landmark"] = None
         conv.requirements["named_landmark_max_km"] = None
+        # Don't repeat the SAME availability caveat turn after turn ("no gym…", "no gym…").
+        # Show it once; suppress it on the next turn if it's identical.
+        if filter_note and filter_note == conv.requirements.get("_last_filter_note"):
+            filter_note = ""
+        conv.requirements["_last_filter_note"] = filter_note
         avail_note = f"\n⚠️ availability_note: {filter_note}\n" if filter_note else ""
         user_prompt = PROPERTY_RECOMMENDATION_PROMPT.format(
             count=len(properties),
@@ -1088,6 +1105,47 @@ def _fmt_visit(dt) -> str:
     ap = "am" if dt.hour < 12 else "pm"
     mm = f":{dt.minute:02d}" if dt.minute else ""
     return dt.strftime("%A, %d %b") + f" at {h12}{mm} {ap}"
+
+
+def _handle_emi(conv: ConversationManager, user_name: str | None) -> str:
+    """Give an indicative home-loan EMI for the property in focus (or the budget)."""
+    cards = conv.requirements.get("_last_shown_cards") or []
+    liked = conv.requirements.get("_liked_property_id")
+    price = None
+    if liked:
+        price = next((c.get("price_inr") for c in cards if c.get("id") == liked), None)
+    if not price and cards:
+        price = cards[0].get("price_inr")
+    if not price and conv.requirements.get("max_budget_cr"):
+        price = int(conv.requirements["max_budget_cr"] * 1_00_00_000)
+
+    name = f", {user_name}" if user_name else ""
+    if not price:
+        return (f"Happy to help with the numbers{name}! Tell me a property or a budget and I'll "
+                "give you a rough monthly EMI. As a guide, banks fund about 80% of the price at "
+                "~8.5% over 20 years.")
+
+    # 80% loan-to-value, 8.5% p.a., 20 years.
+    loan = price * 0.80
+    r = 0.085 / 12
+    n = 240
+    emi = loan * r * (1 + r) ** n / ((1 + r) ** n - 1)
+    down = price - loan
+
+    def _money(v):
+        if v >= 1_00_00_000:
+            cr = v / 1_00_00_000
+            return f"Rs.{cr:.2f} Cr" if cr != int(cr) else f"Rs.{int(cr)} Cr"
+        lakh = v / 1_00_000
+        return f"Rs.{lakh:.1f} lakh" if lakh != int(lakh) else f"Rs.{int(lakh)} lakh"
+
+    emi_k = round(emi / 1000)
+    return (
+        f"Sure{name}! For a {_money(price)} property, a typical home loan (80% funded at ~8.5% "
+        f"over 20 years) works out to roughly **Rs.{emi_k},000 per month**, with about "
+        f"{_money(down)} as down payment. That's just indicative — I can have our consultant get "
+        "you exact figures and the best bank offers. Would that help?"
+    )
 
 
 def _ask_for_contact(conv: ConversationManager, user_name: str | None) -> str:
