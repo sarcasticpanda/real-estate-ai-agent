@@ -70,6 +70,15 @@ def _budget_score(data: dict, req: dict) -> float:
     if min_budget and price_cr < min_budget * 0.5:
         return 60.0  # suspiciously cheap — slight penalty
 
+    # Far BELOW the stated budget: a buyer asking around ₹1.5 Cr shouldn't be led
+    # with ₹12 L flats. Gently de-rank well-under-budget homes so in-budget options
+    # float to the top — but keep cheaper ones visible (floor ~55), since "under X"
+    # buyers still legitimately want value picks.
+    if max_budget:
+        ratio = price_cr / max_budget
+        if ratio < 0.5:
+            return max(55.0, 55.0 + ratio * 90.0)  # 0.5→100, 0.25→~78, 0.08→~62
+
     return 100.0
 
 

@@ -12,7 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from database.supabase_client import save_lead, get_broker_for_area, get_user_profile
+from database.supabase_client import (
+    save_lead, get_broker_for_area, get_user_profile,
+    get_recent_lead_by_phone, update_lead,
+)
 from notifications.email_notifier import notify_broker_email, notify_buyer_email
 from notifications.whatsapp_notifier import notify_broker_whatsapp, notify_buyer_whatsapp
 
@@ -21,6 +24,22 @@ logger = logging.getLogger(__name__)
 PHONE_RE = re.compile(r"(?:\+91[-\s]?)?[6-9]\d{9}")
 # Single-word Indian names are common (Riya, Raj, Priya, Amit etc.)
 NAME_MIN_LEN = 2  # minimum character length for a name word
+
+
+def is_fake_phone(phone: str | None) -> bool:
+    """True for obviously bogus numbers: all-same digit, ≤2 distinct digits, or a
+    straight ascending/descending run (1234567890 / 9876543210)."""
+    if not phone:
+        return True
+    d = re.sub(r"\D", "", phone)[-10:]
+    if len(d) < 10:
+        return True
+    if len(set(d)) <= 2:
+        return True
+    start = int(d[0])
+    asc = "".join(str((start + i) % 10) for i in range(10))
+    desc = "".join(str((start - i) % 10) for i in range(10))
+    return d in (asc, desc)
 
 
 def extract_name_and_phone(text: str) -> tuple[str | None, str | None]:
@@ -85,8 +104,22 @@ def create_lead(
     }
 
     try:
-        saved = save_lead(lead_data)
-        logger.info(f"Lead saved: {saved.get('id')} — {name} ({phone})")
+        # Dedup: if this phone already led recently, refresh that lead instead of
+        # inserting a duplicate (broker shouldn't get the same person twice).
+        existing = None
+        try:
+            existing = get_recent_lead_by_phone(phone) if phone else None
+        except Exception as e:
+            logger.warning(f"dedup lookup failed (continuing): {e}")
+
+        if existing:
+            refresh = {k: v for k, v in lead_data.items() if v is not None}
+            refresh["status"] = existing.get("status") or "new"  # keep broker's progress
+            saved = update_lead(existing["id"], refresh) or existing
+            logger.info(f"Lead deduped → updated existing {existing['id']} — {name} ({phone})")
+        else:
+            saved = save_lead(lead_data)
+            logger.info(f"Lead saved: {saved.get('id')} — {name} ({phone})")
 
         # Fire-and-forget notifications — failures don't block the lead save
         _send_lead_notifications(saved, requirements, broker, name, phone)

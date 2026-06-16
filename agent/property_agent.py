@@ -939,7 +939,13 @@ def _handle_lead_capture(
     user_message: str,
     user_name: str | None,
 ) -> str:
+    from agent.lead_collector import is_fake_phone
     name, phone = extract_name_and_phone(user_message)
+
+    # Reject obviously bogus numbers (9999999999, 1234567890) before saving a junk lead.
+    if phone and is_fake_phone(phone):
+        return ("That number doesn't look quite right — could you double-check and share "
+                "your 10-digit mobile number so our consultant can reach you?")
 
     if name and phone:
         liked_id = conv.requirements.get("_liked_property_id")
@@ -951,7 +957,8 @@ def _handle_lead_capture(
             property_id=liked_id,
         )
         if lead:
-            notify_broker_via_n8n(lead, conv.requirements)
+            # (broker is already notified inside create_lead via email/WhatsApp; the old
+            # n8n webhook call hit a dead localhost and only produced error noise.)
             profile = conv.requirements.get("_profile") or {}
             profile["name"] = name
             profile["phone"] = phone

@@ -114,6 +114,25 @@ def get_leads_for_broker(broker_id: str, status: str | None = None) -> list[dict
     return q.execute().data or []
 
 
+def get_recent_lead_by_phone(phone: str, within_hours: int = 48) -> dict | None:
+    """Find a lead with this phone created within the last N hours (for dedup)."""
+    if not phone:
+        return None
+    from datetime import datetime, timezone, timedelta
+    since = (datetime.now(timezone.utc) - timedelta(hours=within_hours)).isoformat()
+    client = get_client()
+    rows = (client.table("leads").select("*").eq("phone", phone)
+            .gte("created_at", since).order("created_at", desc=True).limit(1).execute().data)
+    return rows[0] if rows else None
+
+
+def update_lead(lead_id: str, fields: dict) -> dict:
+    """Update arbitrary fields on a lead (used by dedup to refresh an existing lead)."""
+    client = get_client()
+    res = client.table("leads").update(fields).eq("id", lead_id).execute()
+    return res.data[0] if res.data else {}
+
+
 def get_all_leads(status: str | None = None, limit: int = 200) -> list[dict]:
     """All leads, newest first — for the broker dashboard (leads may have no broker_id)."""
     client = get_client()
