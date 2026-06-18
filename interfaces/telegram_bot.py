@@ -189,63 +189,69 @@ async def _send_property_cards(
     session_id: str,
     properties: list,
 ) -> None:
-    """Send property photo groups + Save inline button for each property."""
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_photo")
+    """Send each property: photo(s) + a details message (with buttons) that ALWAYS
+    appears — even when there's no photo — and survives Markdown-formatting errors."""
+    from telegram.error import BadRequest
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+
     for i, prop in enumerate(properties, 1):
-        images = prop.get("images", [])
-        bhk = prop.get("bhk", "")
-        ptype = prop.get("property_type", "")
-        area = prop.get("area", "")
-        price = prop.get("price_str", "")
-        sqft = prop.get("sqft", "")
-        furnishing = prop.get("furnishing", "")
-        amenities = prop.get("top_amenities", [])
-        connectivity = prop.get("connectivity", {})
+        images = prop.get("images", []) or []
         prop_id = prop.get("id", "")
 
-        conn_str = " | ".join(f"{k}: {v}" for k, v in connectivity.items())
-        caption = (
-            f"*Property {i}: {bhk} BHK {ptype}*\n"
-            f"📍 {area}  |  {price}\n"
-            f"📐 {sqft} sqft  |  {furnishing}\n"
-            f"🏃 {conn_str or 'N/A'}\n"
-            f"✨ {', '.join(amenities[:3])}"
-        )
+        lines = [
+            f"*Property {i}: {prop.get('bhk','')} BHK {prop.get('property_type','')}*",
+            f"📍 {prop.get('area','')}  |  {prop.get('price_str','')}",
+            f"📐 {prop.get('sqft','')} sqft  |  {prop.get('furnishing','')}",
+        ]
+        if prop.get("landmark_name") and prop.get("landmark_distance_km") is not None:
+            lines.append(f"🎯 {prop['landmark_distance_km']} km from {prop['landmark_name']}")
+        conn_str = " | ".join(f"{k}: {v}" for k, v in (prop.get("connectivity") or {}).items())
+        if conn_str:
+            lines.append(f"🏃 {conn_str}")
+        if prop.get("top_amenities"):
+            lines.append(f"✨ {', '.join(prop['top_amenities'][:4])}")
+        if prop.get("map_url"):
+            lines.append(f"🗺️ [View on map]({prop['map_url']})")
+        for d in (prop.get("documents") or [])[:3]:
+            lines.append(f"📄 [{d.get('label','Document')}]({d.get('url')})")
+        caption = "\n".join(lines)
 
-        # Save button — attached as a text message after the photo
-        save_keyboard = None
+        buttons = [InlineKeyboardButton("📅 Book Visit", callback_data=f"visit_{i}")]
         if prop_id:
-            save_keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("❤️ Save to Shortlist", callback_data=f"save_{prop_id}"),
-            ]])
+            buttons.append(InlineKeyboardButton("❤️ Save", callback_data=f"save_{prop_id}"))
+        buttons.append(InlineKeyboardButton("📞 Callback", callback_data=f"call_{i}"))
+        markup = InlineKeyboardMarkup([buttons])
 
+        # Photos go first WITHOUT a caption, so a Markdown/photo failure can never hide
+        # the property's details (which are sent as their own message below).
         try:
-            if images:
-                if len(images) == 1:
-                    await context.bot.send_photo(
-                        chat_id=update.effective_chat.id,
-                        photo=images[0],
-                        caption=caption,
-                        parse_mode="Markdown",
-                    )
-                else:
-                    from telegram import InputMediaPhoto
-                    media = [InputMediaPhoto(media=images[0], caption=caption, parse_mode="Markdown")]
-                    for url in images[1:3]:
-                        media.append(InputMediaPhoto(media=url))
-                    await context.bot.send_media_group(
-                        chat_id=update.effective_chat.id,
-                        media=media,
-                    )
-            # Send Save button as a separate small message below the photo
-            if save_keyboard:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"Property {i} — {area}",
-                    reply_markup=save_keyboard,
-                )
+            if len(images) == 1:
+                await context.bot.send_photo(chat_id=chat_id, photo=images[0])
+            elif len(images) > 1:
+                from telegram import InputMediaPhoto
+                await context.bot.send_media_group(
+                    chat_id=chat_id, media=[InputMediaPhoto(media=u) for u in images[:3]])
         except Exception as e:
-            logger.warning(f"Could not send property {i}: {e}")
+            logger.warning(f"Property {i} photo send failed (continuing): {e}")
+
+        # Details + buttons — try Markdown, fall back to plain text on a formatting error.
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id, text=caption, parse_mode="Markdown",
+                reply_markup=markup, disable_web_page_preview=True)
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id=chat_id, text=_strip_md(caption),
+                reply_markup=markup, disable_web_page_preview=True)
+        except Exception as e:
+            logger.warning(f"Property {i} details send failed: {e}")
+
+
+def _strip_md(text: str) -> str:
+    """Plain-text fallback: turn [label](url) into 'label: url' and drop * markers."""
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1: \2", text)
+    return text.replace("*", "")
 
 
 async def _process_search_message(
@@ -490,11 +496,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Save to shortlist error: {e}")
             await query.answer("Could not save. Please try again.", show_alert=True)
 
-    elif query.data == "schedule_visit":
-        await query.message.reply_text(
-            "To schedule a visit, please share your preferred date and time. "
-            "The broker will confirm the slot."
-        )
+    elif query.data and (query.data.startswith("visit_") or query.data.startswith("call_")):
+        # Route the button through the agent so it triggers lead capture / scheduling.
+        session_id = str(query.message.chat.id)
+        num = query.data.split("_", 1)[1]
+        is_visit = query.data.startswith("visit_")
+        msg = (f"I want to visit property {num}" if is_visit
+               else f"Please have someone call me back about property {num}")
+        try:
+            from agent.property_agent import process_message
+            result = process_message(session_id=session_id, user_message=msg, platform="telegram")
+            await query.edit_message_reply_markup(reply_markup=None)
+            try:
+                await query.message.reply_text(result["reply"], parse_mode="Markdown")
+            except Exception:
+                await query.message.reply_text(_strip_md(result["reply"]))
+        except Exception as e:
+            logger.error(f"visit/callback button error: {e}")
+            await query.message.reply_text(
+                "Let me connect you — could you share your name and mobile number?")
 
 
 # ── Bot entry point ───────────────────────────────────────────────────────────
