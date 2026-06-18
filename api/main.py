@@ -181,12 +181,68 @@ async def get_shortlist(session_id: str):
 
 # ── Broker upload endpoint ────────────────────────────────────────────────────
 
+@app.post("/upload/preview")
+async def upload_preview(token: str = Form(...), file: UploadFile = File(...)):
+    """
+    Parse a broker CSV and return a preview of detected columns + sample rows
+    WITHOUT importing. Broker reviews, corrects if needed, then calls /upload.
+    """
+    _check_broker_token(token)
+    import csv, io, chardet
+    raw = await file.read()
+    enc = chardet.detect(raw).get("encoding") or "utf-8"
+    text = raw.decode(enc, errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)[:5]  # only first 5 for preview
+    headers = reader.fieldnames or []
+
+    # Auto-map column names using flexible aliases
+    ALIASES = {
+        "property_type": ["property_type","type","prop_type","category","kind"],
+        "bhk": ["bhk","bedrooms","beds","bedroom","rooms","bed"],
+        "price_inr": ["price_inr","price","cost","amount","value","rate","total_price"],
+        "area_sqft": ["area_sqft","area","sqft","size","carpet_area","builtup","built_up"],
+        "address": ["address","locality","location","addr","area_name","area","neighbourhood"],
+        "city": ["city","town"],
+        "furnishing": ["furnishing","furnished","furnish"],
+        "amenities": ["amenities","facilities","features","amenity"],
+        "broker_name": ["broker_name","broker","agent","agent_name","owner"],
+        "broker_phone": ["broker_phone","phone","mobile","contact","number"],
+        "description": ["description","desc","details","remarks","notes"],
+        "external_ref": ["external_ref","ref","listing_id","id","property_id","pid"],
+    }
+    mapping = {}
+    h_lower = {h.lower().strip().replace(" ", "_"): h for h in headers}
+    for canon, alts in ALIASES.items():
+        for a in alts:
+            if a in h_lower:
+                mapping[canon] = h_lower[a]
+                break
+
+    return {
+        "ok": True,
+        "total_rows": sum(1 for _ in csv.DictReader(io.StringIO(text))),
+        "headers": headers,
+        "column_mapping": mapping,
+        "sample_rows": rows[:3],
+        "unmapped": [c for c in ["property_type","price_inr","address"] if c not in mapping],
+    }
+
+
 @app.post("/upload")
 async def upload_properties(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     broker_id: str = Form(None),
+    token: str = Form(None),
+    column_map: str = Form(None),   # JSON string: {"price_inr": "Cost", "address": "Locality", ...}
 ):
+    """
+    Import properties from a CSV. Supports any column names via column_map.
+    Flow: broker calls /upload/preview first to get the auto-detected mapping,
+    reviews/corrects it, then submits here with column_map as JSON.
+    Geocoding (lat/lng) + Overpass POI distances run automatically per property.
+    """
     if not file.filename.endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
@@ -195,19 +251,54 @@ async def upload_properties(
     tmp.write(content)
     tmp.close()
 
-    background_tasks.add_task(_run_upload, tmp.name, broker_id)
+    parsed_map = {}
+    if column_map:
+        import json as _json
+        try:
+            parsed_map = _json.loads(column_map)
+        except Exception:
+            pass
+
+    background_tasks.add_task(_run_upload, tmp.name, broker_id, parsed_map)
 
     return {
         "status": "processing",
-        "message": f"File '{file.filename}' received. Properties will be enriched and added to the knowledge base.",
+        "message": f"File '{file.filename}' received. Each property will be geocoded and enriched with POI distances. This takes ~2s per row.",
         "broker_id": broker_id,
     }
 
 
-def _run_upload(filepath: str, broker_id: str | None) -> None:
+def _run_upload(filepath: str, broker_id: str | None, column_map: dict | None = None) -> None:
+    """Run the full enrichment pipeline on a CSV file.
+    column_map remaps arbitrary column names to canonical ones before processing."""
+    import csv, io
     try:
+        if column_map:
+            # Re-write the file with canonical column names so process_csv understands it
+            with open(filepath, encoding="utf-8-sig") as f:
+                rows = list(csv.DictReader(f))
+            if rows:
+                # Build reverse map: original_header → canonical_name
+                rev = {v: k for k, v in column_map.items()}
+                remapped = []
+                for row in rows:
+                    new_row = {}
+                    for k, v in row.items():
+                        new_row[rev.get(k, k)] = v
+                    remapped.append(new_row)
+                import tempfile as _tmp
+                with _tmp.NamedTemporaryFile(delete=False, suffix=".csv", mode="w",
+                                             encoding="utf-8", newline="") as out:
+                    w = csv.DictWriter(out, fieldnames=list(remapped[0].keys()))
+                    w.writeheader(); w.writerows(remapped)
+                    mapped_path = out.name
+                Path(filepath).unlink(missing_ok=True)
+                filepath = mapped_path
+
         result = process_csv(filepath, broker_id=broker_id)
         logger.info(f"Upload job complete: {result}")
+    except Exception as e:
+        logger.error(f"Upload pipeline error: {e}")
     finally:
         Path(filepath).unlink(missing_ok=True)
 
@@ -973,6 +1064,11 @@ async def broker_add_page():
     return _BROKER_ADD_HTML
 
 
+@app.get("/broker/upload", response_class=HTMLResponse)
+async def broker_upload_page():
+    return _BROKER_UPLOAD_HTML
+
+
 # ── Broker: my listings (view + edit price + availability) ───────────────────
 
 @app.get("/broker/properties")
@@ -1081,7 +1177,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:1
 .empty{color:#64748b;text-align:center;padding:40px}
 a.call{color:#0f766e;text-decoration:none;font-weight:600}
 </style></head><body>
-<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline · <a href="/broker/add">+ Add a property</a> · <a href="/broker/listings">My listings</a></div>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
   <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
@@ -1309,6 +1405,91 @@ def _image_manager_html(property_id: str) -> str:
         "window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};"
         "</script></body></html>"
     )
+
+
+_BROKER_UPLOAD_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Upload Properties CSV</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f1f5f9;padding:18px;max-width:720px;margin:auto;color:#0f172a}
+h1{font-size:20px;color:#1d4ed8}.sub{color:#64748b;font-size:13px;margin-bottom:14px}
+.box{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:12px;font-weight:600;color:#475569;margin:8px 0 3px}
+input,select{width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px}
+button{cursor:pointer;border:none;border-radius:8px;padding:9px 14px;font-size:14px;font-weight:700;background:#1d4ed8;color:#fff}
+.drop{border:2px dashed #cbd5e1;border-radius:10px;padding:20px;text-align:center;color:#64748b;cursor:pointer}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:5px 8px;text-align:left;border-bottom:1px solid #f1f5f9}
+th{background:#f8fafc;font-weight:700}select.map{font-size:12px;padding:3px}
+.ok{color:#166534;font-weight:600}.err{color:#991b1b;font-weight:600}
+.note{background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px;font-size:12px;margin-bottom:10px}
+</style></head><body>
+<h1>Upload Properties CSV</h1>
+<div class="sub"><a href="/broker">← dashboard</a> · <a href="/broker/add">+ add single</a></div>
+<div class="note">💡 Any column names work — Riya auto-detects them. Review the mapping below before importing.
+Each property will be geocoded (lat/lng) and enriched with nearby metro/hospital/school distances automatically.</div>
+
+<div class="box">
+  <label>Broker token</label><input id="tok" type="password" placeholder="token">
+  <label style="margin-top:10px">CSV file</label>
+  <div class="drop" onclick="document.getElementById('csv').click()">Click to choose a CSV file</div>
+  <input id="csv" type="file" accept=".csv" style="display:none" onchange="preview()">
+</div>
+
+<div id="preview-box" class="box" style="display:none">
+  <b>Column mapping</b> <span id="map-note" style="font-size:12px;color:#64748b;margin-left:8px"></span>
+  <table id="map-table" style="margin-top:8px"></table>
+  <div id="sample-wrap" style="margin-top:12px"><b style="font-size:12px">Sample rows:</b>
+    <div id="sample" style="overflow-x:auto;margin-top:6px"></div></div>
+  <button style="margin-top:12px" onclick="doImport()">Import all rows</button>
+  <div id="result" style="margin-top:8px"></div>
+</div>
+
+<script>
+let _headers=[], _mapping={}, _file=null;
+function tok(){return document.getElementById('tok').value.trim();}
+async function preview(){
+  _file=document.getElementById('csv').files[0];if(!_file)return;
+  const fd=new FormData();fd.append('token',tok()||'broker');fd.append('file',_file);
+  const r=await fetch('/upload/preview',{method:'POST',body:fd});
+  if(!r.ok){alert('Preview failed: '+await r.text());return;}
+  const d=await r.json();
+  _headers=d.headers||[];_mapping=d.column_mapping||{};
+  document.getElementById('preview-box').style.display='block';
+  document.getElementById('map-note').textContent=d.total_rows+' rows · '+d.headers.length+' columns';
+  // Column mapping table
+  const canonical=['property_type','bhk','price_inr','area_sqft','address','city','furnishing','amenities','broker_name','broker_phone','description','external_ref'];
+  const labels={'property_type':'Type *','bhk':'BHK','price_inr':'Price ₹ *','area_sqft':'Area sqft','address':'Address *','city':'City','furnishing':'Furnishing','amenities':'Amenities','broker_name':'Broker name','broker_phone':'Broker phone','description':'Description','external_ref':'Ref (idempotent key)'};
+  let html='<tr><th>Field</th><th>Mapped to CSV column</th></tr>';
+  canonical.forEach(c=>{
+    const mapped=_mapping[c]||'';
+    const opts=_headers.map(h=>'<option'+(h===mapped?' selected':'')+'>'+h+'</option>').join('');
+    html+='<tr><td>'+labels[c]+'</td><td><select class="map" id="m_'+c+'"><option value="">— skip —</option>'+opts+'</select></td></tr>';
+  });
+  document.getElementById('map-table').innerHTML=html;
+  // Sample table
+  if(d.sample_rows&&d.sample_rows.length){
+    let sh='<table><tr>'+_headers.map(h=>'<th>'+h+'</th>').join('')+'</tr>';
+    d.sample_rows.forEach(row=>{sh+='<tr>'+_headers.map(h=>'<td>'+(row[h]||'')+'</td>').join('')+'</tr>';});
+    document.getElementById('sample').innerHTML=sh+'</table>';
+  }
+}
+async function doImport(){
+  if(!_file){alert('No file chosen');return;}
+  // build column_map from selects
+  const cmap={};
+  document.querySelectorAll('.map').forEach(s=>{
+    const canon=s.id.replace('m_','');if(s.value)cmap[canon]=s.value;});
+  document.getElementById('result').innerHTML='<span style="color:#0f766e">Importing... this may take 2-3s per property due to geocoding. Do not close this tab.</span>';
+  const fd=new FormData();
+  fd.append('token',tok()||'broker');
+  fd.append('file',_file);
+  fd.append('column_map',JSON.stringify(cmap));
+  const r=await fetch('/upload',{method:'POST',body:fd});
+  const d=await r.json();
+  document.getElementById('result').innerHTML=
+    '<span class="ok">'+d.message+'</span>';
+}
+window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;};
+</script></body></html>"""
 
 
 _BROKER_LISTINGS_HTML = """<!DOCTYPE html>
