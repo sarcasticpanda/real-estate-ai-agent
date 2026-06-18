@@ -17,6 +17,7 @@ Usage:
 import csv
 import json
 import uuid
+import hashlib
 import sys
 import logging
 import argparse
@@ -47,7 +48,14 @@ def parse_amenities(amenities_str: str) -> list[str]:
 
 def normalize_row(row: dict, broker_id: str | None = None) -> dict:
     """Convert a CSV row dict into the standard property JSON schema."""
-    prop_id = f"BROKER_{uuid.uuid4().hex[:8].upper()}"
+    # Idempotent uploads: if the broker provides their own stable reference
+    # (external_ref / ref / listing_id), derive the id from it so re-uploading the
+    # same listing UPDATES it instead of creating a duplicate. Otherwise mint a uuid.
+    ext_ref = str(row.get("external_ref") or row.get("ref") or row.get("listing_id") or "").strip()
+    if ext_ref:
+        prop_id = f"BROKER_{hashlib.md5(ext_ref.encode()).hexdigest()[:10].upper()}"
+    else:
+        prop_id = f"BROKER_{uuid.uuid4().hex[:8].upper()}"
     ptype = str(row.get("property_type", "")).strip().title()
     city = str(row.get("city", "Lucknow")).strip()
     address = str(row.get("address", "")).strip()

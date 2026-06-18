@@ -381,6 +381,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .pcard-actions{display:flex;gap:8px}
 .btn-visit{flex:1;padding:10px;background:#1a73e8;color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
 .btn-visit:hover{background:#1558b0}
+.btn-call{padding:10px 12px;background:#fff;color:#0f766e;border:1.5px solid #0f766e;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap}
+.btn-call:hover{background:#ecfdf5}
 .btn-save{padding:10px 14px;background:#fff;color:#e83030;border:1.5px solid #e83030;border-radius:10px;font-size:14px;cursor:pointer;transition:.15s;white-space:nowrap}
 .btn-save:hover{background:#fff0f0}
 .btn-save.saved{background:#e83030;color:white}
@@ -688,6 +690,11 @@ function buildCard(p, num) {
   visitBtn.textContent = 'Book Site Visit';
   visitBtn.onclick = () => { inp.value = 'I want to visit property ' + num; send(); };
 
+  const callBtn = document.createElement('button');
+  callBtn.className = 'btn-call';
+  callBtn.textContent = '📞 Request callback';
+  callBtn.onclick = () => { inp.value = 'Please have someone call me back about property ' + num; send(); };
+
   const isSaved = savedIds.has(p.id);
   const saveBtn = document.createElement('button');
   saveBtn.className = 'btn-save' + (isSaved ? ' saved' : '');
@@ -696,6 +703,7 @@ function buildCard(p, num) {
   saveBtn.onclick = () => toggleSave(p.id, saveBtn);
 
   actions.appendChild(visitBtn);
+  actions.appendChild(callBtn);
   actions.appendChild(saveBtn);
   body.appendChild(actions);
   card.appendChild(body);

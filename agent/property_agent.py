@@ -85,7 +85,7 @@ _EMI_RE = re.compile(
 
 # Strong action words — buyer wants to act NOW (visit/book), not just discuss
 _ACTION_RE = re.compile(
-    r"\b(visit|book|schedule|arrange|contact|call me|broker|proceed|"
+    r"\b(visit|book|schedule|arrange|contact|call me|call ?back|callback|broker|proceed|"
     r"i'?ll take|interested in (buying|booking)|site visit|see it in person|"
     r"meet|appointment|finalize|go ahead)\b",
     re.IGNORECASE,

@@ -316,7 +316,8 @@ def _clean_landmark_phrase(raw: str) -> str:
 # Action words that genuinely signal readiness to act (book/visit/contact NOW)
 _ACTION_WORDS_RE = re.compile(
     r"\b(visit|book|schedule|arrange|appointment|site visit|"
-    r"contact|call me|broker'?s? (number|contact)|give me .{0,15}number|"
+    r"contact|call me|call ?back|request a call|have someone call|"
+    r"broker'?s? (number|contact)|give me .{0,15}number|"
     r"proceed|i'?ll take|take this|finalize|finalise|go ahead|"
     r"see (it|the .{1,12}) in person|meet)\b",
     re.IGNORECASE,
