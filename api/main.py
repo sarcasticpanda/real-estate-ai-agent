@@ -40,6 +40,7 @@ from broker.upload_handler import process_csv, create_property_from_fields
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
+    delete_property_image, reorder_property_images, replace_unsplash_images,
     upload_property_document, add_document_to_property, get_property_documents,
     get_session, save_session, get_all_leads, mark_property_booked,
     list_properties, update_property,
@@ -322,6 +323,57 @@ async def upload_image(property_id: str, file: UploadFile = File(...)):
 async def get_images(property_id: str):
     images = get_property_images(property_id)
     return {"property_id": property_id, "count": len(images), "images": images}
+
+
+@app.post("/properties/{property_id}/images/multi")
+async def upload_images_multi(property_id: str, token: str = Form(...), files: list[UploadFile] = File(...)):
+    """Upload multiple images at once. Drops Unsplash placeholders when real images are added."""
+    _check_broker_token(token)
+    uploaded = []
+    for file in files[:10]:  # max 10 at once
+        ct = file.content_type or "image/jpeg"
+        if ct not in ALLOWED_IMAGE_TYPES:
+            continue
+        data = await file.read()
+        if len(data) > MAX_IMAGE_SIZE_MB * 1024 * 1024:
+            continue
+        url = upload_property_image(property_id, file.filename or "photo", data, ct)
+        if url:
+            uploaded.append(url)
+    if uploaded:
+        replace_unsplash_images(property_id, uploaded)
+    return {"ok": True, "uploaded": len(uploaded), "urls": uploaded}
+
+
+class DeleteImageReq(BaseModel):
+    token: str
+    image_url: str
+
+
+@app.delete("/properties/{property_id}/images")
+async def delete_image(property_id: str, req: DeleteImageReq):
+    _check_broker_token(req.token)
+    ok = delete_property_image(property_id, req.image_url)
+    return {"ok": ok}
+
+
+class ReorderImagesReq(BaseModel):
+    token: str
+    ordered_urls: list[str]
+
+
+@app.post("/properties/{property_id}/images/reorder")
+async def reorder_images(property_id: str, req: ReorderImagesReq):
+    """Set the display order; first URL becomes the hero image."""
+    _check_broker_token(req.token)
+    ok = reorder_property_images(property_id, req.ordered_urls)
+    return {"ok": ok}
+
+
+@app.get("/broker/images/{property_id}", response_class=HTMLResponse)
+async def broker_image_manager(property_id: str):
+    """Simple drag-to-reorder, upload, delete image manager for one property."""
+    return _image_manager_html(property_id)
 
 
 # ── Simple web chat interface ─────────────────────────────────────────────────
@@ -1181,6 +1233,84 @@ window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElement
 </script></body></html>"""
 
 
+def _image_manager_html(property_id: str) -> str:
+    pid = property_id
+    return (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Images</title><style>"
+        "*{box-sizing:border-box;margin:0;padding:0}"
+        "body{font-family:system-ui,sans-serif;background:#f1f5f9;padding:16px;color:#0f172a}"
+        "h1{font-size:18px;color:#1d4ed8;margin-bottom:4px}"
+        ".sub{color:#64748b;font-size:12px;margin-bottom:14px}"
+        ".bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center}"
+        ".bar input{padding:8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:160px}"
+        "button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:600}"
+        ".bp{background:#1d4ed8;color:#fff}"
+        ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px}"
+        ".ic{background:#fff;border:2px solid #e2e8f0;border-radius:10px;overflow:hidden;position:relative;cursor:grab}"
+        ".ic img{width:100%;height:100px;object-fit:cover}"
+        ".ic.hero{border-color:#1d4ed8}"
+        ".hb{position:absolute;top:4px;left:4px;background:#1d4ed8;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:99px}"
+        ".xb{position:absolute;top:4px;right:4px;background:#ef4444;color:#fff;border:none;border-radius:99px;width:22px;height:22px;cursor:pointer;font-size:13px}"
+        ".drop{border:2px dashed #cbd5e1;border-radius:10px;padding:20px;text-align:center;color:#64748b;cursor:pointer;margin-bottom:14px}"
+        ".st{font-size:13px;color:#0f766e;margin-top:8px}"
+        "</style></head><body>"
+        "<h1>Images &mdash; " + pid + "</h1>"
+        "<div class='sub'>Drag to reorder &middot; First = hero photo &middot; Uploading real images removes Unsplash placeholders</div>"
+        "<div class='bar'>"
+        "<input type='password' id='tok' placeholder='Broker token'>"
+        "<button class='bp' onclick='load()'>Load</button>"
+        "<button class='bp' onclick='document.getElementById(\"fp\").click()'>+ Upload</button>"
+        "<button class='bp' onclick='saveOrd()'>Save order</button>"
+        "</div>"
+        "<input id='fp' type='file' accept='image/*' multiple style='display:none' onchange='upFiles()'>"
+        "<div class='drop' onclick='document.getElementById(\"fp\").click()'>Click or drag photos here (max 10 at once, 5MB each)</div>"
+        "<div id='grid' class='grid'></div><div id='st' class='st'></div>"
+        "<script>"
+        "const PID='" + pid + "';"
+        "function tok(){return document.getElementById('tok').value.trim();}"
+        "async function load(){"
+        "  const r=await fetch('/properties/'+PID+'/images');const d=await r.json();"
+        "  render(d.images||[]);localStorage.setItem('btok',tok());}"
+        "function render(urls){"
+        "  const g=document.getElementById('grid');g.innerHTML='';"
+        "  urls.forEach((u,i)=>{"
+        "    const c=document.createElement('div');c.className='ic'+(i===0?' hero':'');c.draggable=true;c.dataset.url=u;"
+        "    c.innerHTML=(i===0?'<span class=\"hb\">HERO</span>':'')"
+        "      +'<img src=\"'+u+'?w=200\" onerror=\"this.src=\\''+u+'\\'\">' "
+        "      +'<button class=\"xb\" onclick=\"del(\\''+encodeURIComponent(u)+'\\')\">&times;</button>';"
+        "    c.addEventListener('dragstart',e=>e.dataTransfer.setData('idx',i));"
+        "    c.addEventListener('dragover',e=>e.preventDefault());"
+        "    c.addEventListener('drop',e=>{e.preventDefault();const from=+e.dataTransfer.getData('idx');"
+        "      const items=[...g.children];const mv=items[from];g.removeChild(mv);g.insertBefore(mv,items[i]);reIdx();});"
+        "    g.appendChild(c);});}"
+        "function reIdx(){const cs=[...document.querySelectorAll('.ic')];cs.forEach((c,i)=>{"
+        "  c.classList.toggle('hero',i===0);const b=c.querySelector('.hb');"
+        "  if(i===0){if(!b){const nb=document.createElement('span');nb.className='hb';nb.textContent='HERO';c.prepend(nb);}}"
+        "  else{if(b)b.remove();}});}"
+        "async function saveOrd(){"
+        "  const urls=[...document.querySelectorAll('.ic')].map(c=>c.dataset.url);"
+        "  await fetch('/properties/'+PID+'/images/reorder',{method:'POST',headers:{'Content-Type':'application/json'},"
+        "    body:JSON.stringify({token:tok(),ordered_urls:urls})});"
+        "  document.getElementById('st').textContent='Order saved!';setTimeout(()=>document.getElementById('st').textContent='',2000);}"
+        "async function del(url){"
+        "  if(!confirm('Delete this image?'))return;"
+        "  await fetch('/properties/'+PID+'/images',{method:'DELETE',headers:{'Content-Type':'application/json'},"
+        "    body:JSON.stringify({token:tok(),image_url:decodeURIComponent(url)})});load();}"
+        "async function upFiles(){"
+        "  const files=document.getElementById('fp').files;if(!files.length)return;"
+        "  document.getElementById('st').textContent='Uploading '+files.length+' image(s)...';"
+        "  const fd=new FormData();fd.append('token',tok());"
+        "  for(const f of files)fd.append('files',f);"
+        "  const r=await fetch('/properties/'+PID+'/images/multi',{method:'POST',body:fd});"
+        "  const d=await r.json();"
+        "  document.getElementById('st').textContent=d.uploaded+' image(s) uploaded!';load();}"
+        "window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};"
+        "</script></body></html>"
+    )
+
+
 _BROKER_LISTINGS_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>My Listings — Riya Broker</title>
@@ -1218,7 +1348,7 @@ async function load(){
     const c=document.createElement('div');c.className='card';
     c.innerHTML=`<div class="top"><div>
        <div class="t">${p.bhk?p.bhk+' BHK ':''}${p.property_type||''} · ${p.area_name||''}</div>
-       <div class="meta">${money(p.price_inr)} · 📷 ${p.images} · 📄 ${p.documents} · <span style="color:#94a3b8">${p.id}</span></div></div>
+       <div class="meta">${money(p.price_inr)} · 📷 ${p.images} · 📄 ${p.documents} · <a href="/broker/images/${p.id}" target="_blank" style="color:#1d4ed8;font-size:11px">Manage photos</a></div></div>
        <span class="pill s-${st}">${st}</span></div>
       <div class="row">
         <input type="number" id="pr_${p.id}" placeholder="new price ₹" value="${p.price_inr||''}">

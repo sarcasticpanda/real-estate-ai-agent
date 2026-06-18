@@ -344,6 +344,58 @@ def get_property_images(property_id: str) -> list[str]:
     return result.data[0]["data"].get("images") or []
 
 
+def delete_property_image(property_id: str, image_url: str) -> bool:
+    """Remove one image URL from data.images and delete from Storage if it's our bucket."""
+    import urllib.parse
+    client = get_client()
+    result = client.table("properties").select("data").eq("id", property_id).execute()
+    if not result.data:
+        return False
+    data = result.data[0]["data"]
+    images = [u for u in (data.get("images") or []) if u != image_url]
+    data["images"] = images
+    client.table("properties").update({"data": data}).eq("id", property_id).execute()
+    # Also delete from Storage if it's in our bucket
+    if IMAGES_BUCKET in (image_url or ""):
+        try:
+            parsed = urllib.parse.urlparse(image_url)
+            # path looks like /storage/v1/object/public/property-images/<property_id>/<filename>
+            parts = parsed.path.split(f"{IMAGES_BUCKET}/", 1)
+            if len(parts) == 2:
+                storage_path = parts[1].split("?")[0]
+                client.storage.from_(IMAGES_BUCKET).remove([storage_path])
+        except Exception as e:
+            import logging; logging.getLogger(__name__).warning(f"Storage delete failed: {e}")
+    return True
+
+
+def reorder_property_images(property_id: str, ordered_urls: list[str]) -> bool:
+    """Replace the images list with a caller-supplied ordering (first = hero)."""
+    client = get_client()
+    result = client.table("properties").select("data").eq("id", property_id).execute()
+    if not result.data:
+        return False
+    data = result.data[0]["data"]
+    data["images"] = ordered_urls
+    client.table("properties").update({"data": data}).eq("id", property_id).execute()
+    return True
+
+
+def replace_unsplash_images(property_id: str, new_urls: list[str]) -> bool:
+    """When broker uploads real images, drop all old Unsplash placeholders."""
+    client = get_client()
+    result = client.table("properties").select("data").eq("id", property_id).execute()
+    if not result.data:
+        return False
+    data = result.data[0]["data"]
+    existing = data.get("images") or []
+    # Keep only our own Storage URLs; drop Unsplash
+    own = [u for u in existing if "unsplash.com" not in u]
+    data["images"] = own + new_urls
+    client.table("properties").update({"data": data}).eq("id", property_id).execute()
+    return True
+
+
 # ── Property documents (floor plans, brochures, papers) ──────────────────────
 DOCS_BUCKET = "property-documents"
 
