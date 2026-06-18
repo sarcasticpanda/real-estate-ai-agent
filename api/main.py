@@ -42,6 +42,7 @@ from database.supabase_client import (
     upload_property_image, add_image_url_to_property, get_property_images,
     upload_property_document, add_document_to_property, get_property_documents,
     get_session, save_session, get_all_leads, mark_property_booked,
+    list_properties, update_property,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -888,6 +889,44 @@ async def broker_add_page():
     return _BROKER_ADD_HTML
 
 
+# ── Broker: my listings (view + edit price + availability) ───────────────────
+
+@app.get("/broker/properties")
+async def broker_list_properties(token: str, broker: str | None = None):
+    _check_broker_token(token)
+    try:
+        return {"properties": list_properties(broker_id=broker)}
+    except Exception as e:
+        logger.error(f"broker_list_properties error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PropertyUpdate(BaseModel):
+    token: str
+    price_inr: int | None = None
+    status: str | None = None     # available | booked | sold | unavailable
+
+
+@app.post("/broker/properties/{property_id}/update")
+async def broker_update_property(property_id: str, req: PropertyUpdate):
+    _check_broker_token(req.token)
+    try:
+        ok = update_property(property_id, price_inr=req.price_inr, status=req.status)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Property not found")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"broker_update_property error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/broker/listings", response_class=HTMLResponse)
+async def broker_listings_page():
+    return _BROKER_LISTINGS_HTML
+
+
 _BROKER_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Broker Dashboard — Riya</title>
@@ -911,7 +950,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:1
 .empty{color:#64748b;text-align:center;padding:40px}
 a.call{color:#0f766e;text-decoration:none;font-weight:600}
 </style></head><body>
-<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline · <a href="/broker/add">+ Add a property</a></div>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · leads pipeline · <a href="/broker/add">+ Add a property</a> · <a href="/broker/listings">My listings</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
   <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
@@ -1045,6 +1084,66 @@ async function upDoc(){
   else{const e=await r.json();dl.innerHTML+='<div class="err">'+(e.detail||'upload failed')+'</div>';}
 }
 window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;};
+</script></body></html>"""
+
+
+_BROKER_LISTINGS_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Listings — Riya Broker</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a;padding:18px}
+h1{font-size:20px;color:#1d4ed8}.sub{color:#64748b;font-size:13px;margin-bottom:14px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:14px}.bar input{padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px}
+button{cursor:pointer;border:none;border-radius:7px;padding:7px 11px;font-size:13px;font-weight:600}.load{background:#1d4ed8;color:#fff}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:9px}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.t{font-weight:700}.meta{color:#475569;font-size:13px;margin-top:3px}
+.pill{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;text-transform:capitalize}
+.s-available{background:#dcfce7;color:#166534}.s-booked{background:#fef9c3;color:#854d0e}.s-sold{background:#fee2e2;color:#991b1b}.s-unavailable{background:#e2e8f0;color:#475569}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.row input{width:130px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px}
+.row button{background:#f1f5f9;color:#334155;border:1px solid #e2e8f0}
+.empty{color:#64748b;text-align:center;padding:40px}a{color:#1d4ed8}
+</style></head><body>
+<h1>My Listings</h1><div class="sub">Riya Broker · <a href="/broker">leads</a> · <a href="/broker/add">+ add property</a></div>
+<div class="bar"><input id="tok" type="password" placeholder="Broker token"><button class="load" onclick="load()">Load</button><span id="c" style="color:#64748b;font-size:13px"></span></div>
+<div id="list"></div>
+<script>
+function tok(){return document.getElementById('tok').value.trim();}
+function money(v){if(!v)return '—';return v>=1e7?('Rs.'+(v/1e7).toFixed(2)+' Cr'):('Rs.'+(v/1e5).toFixed(0)+' L');}
+async function load(){
+  const t=tok();if(!t){alert('Enter token');return;}localStorage.setItem('btok',t);
+  const r=await fetch('/broker/properties?token='+encodeURIComponent(t));
+  if(!r.ok){document.getElementById('list').innerHTML='<div class="empty">Unauthorized.</div>';return;}
+  const d=await r.json();const ps=d.properties||[];
+  document.getElementById('c').textContent=ps.length+' listings';
+  const el=document.getElementById('list');if(!ps.length){el.innerHTML='<div class="empty">No listings.</div>';return;}
+  el.innerHTML='';
+  ps.forEach(p=>{
+    const st=(p.status||'available').toLowerCase();
+    const c=document.createElement('div');c.className='card';
+    c.innerHTML=`<div class="top"><div>
+       <div class="t">${p.bhk?p.bhk+' BHK ':''}${p.property_type||''} · ${p.area_name||''}</div>
+       <div class="meta">${money(p.price_inr)} · 📷 ${p.images} · 📄 ${p.documents} · <span style="color:#94a3b8">${p.id}</span></div></div>
+       <span class="pill s-${st}">${st}</span></div>
+      <div class="row">
+        <input type="number" id="pr_${p.id}" placeholder="new price ₹" value="${p.price_inr||''}">
+        <button onclick="setPrice('${p.id}')">Save price</button>
+        <button onclick="setStatus('${p.id}','available')">Available</button>
+        <button onclick="setStatus('${p.id}','sold')">Sold</button>
+        <button onclick="setStatus('${p.id}','unavailable')">Hide</button>
+      </div>`;
+    el.appendChild(c);
+  });
+}
+async function upd(id,body){
+  body.token=tok();
+  const r=await fetch('/broker/properties/'+id+'/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok)load();else alert('Update failed');
+}
+function setPrice(id){const v=parseInt(document.getElementById('pr_'+id).value);if(v)upd(id,{price_inr:v});}
+function setStatus(id,s){upd(id,{status:s});}
+window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}};
 </script></body></html>"""
 
 

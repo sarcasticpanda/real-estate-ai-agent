@@ -90,6 +90,50 @@ def mark_property_booked(property_id: str) -> None:
     client.rpc("mark_property_booked", {"prop_id": property_id}).execute()
 
 
+def list_properties(limit: int = 300, broker_id: str | None = None) -> list[dict]:
+    """List properties (newest first) for the broker 'My listings' view."""
+    client = get_client()
+    rows = (client.table("properties")
+            .select("id,property_id,area_name,city,bhk,price_inr,property_type,status,data,created_at")
+            .order("created_at", desc=True).limit(limit).execute().data) or []
+    if broker_id:
+        rows = [r for r in rows
+                if ((r.get("data") or {}).get("source_ids") or {}).get("broker_id") == broker_id]
+    # Trim heavy/irrelevant data for the list view (keep images count + a couple fields)
+    out = []
+    for r in rows:
+        data = r.get("data") or {}
+        out.append({
+            "id": r["id"], "area_name": r.get("area_name"), "city": r.get("city"),
+            "bhk": r.get("bhk"), "price_inr": r.get("price_inr"),
+            "property_type": r.get("property_type"), "status": r.get("status"),
+            "images": len(data.get("images") or []),
+            "documents": len(data.get("documents") or []),
+            "broker": ((data.get("source_ids") or {}).get("broker_id")
+                       or (data.get("metadata") or {}).get("broker_name")),
+        })
+    return out
+
+
+def update_property(property_id: str, price_inr: int | None = None, status: str | None = None) -> bool:
+    """Update a listing's price and/or availability (keeps data.pricing in sync)."""
+    client = get_client()
+    cur = client.table("properties").select("data").eq("id", property_id).execute().data
+    if not cur:
+        return False
+    update: dict = {}
+    if price_inr is not None:
+        data = cur[0]["data"]
+        data.setdefault("pricing", {})["total_price_inr"] = int(price_inr)
+        update["price_inr"] = int(price_inr)
+        update["data"] = data
+    if status is not None:
+        update["status"] = status
+    if update:
+        client.table("properties").update(update).eq("id", property_id).execute()
+    return True
+
+
 # ── Leads ───────────────────────────────────────────────────────────────────
 
 def save_lead(lead: dict) -> dict:
