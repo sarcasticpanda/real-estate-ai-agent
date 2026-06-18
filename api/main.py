@@ -456,7 +456,25 @@ updateSlCount();
 
 inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) send(); });
 
-// ── Web Speech API (microphone) ───────────────────────────────────────────
+// ── Web Speech API: voice in (mic) + voice out (Riya speaks) — 100% free ────
+let voiceReply = false;   // speak Riya's next reply if the user spoke
+function speak(text) {
+  try {
+    if (!window.speechSynthesis) return;
+    // strip markdown/links/emoji so the spoken version is clean
+    let t = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+                .replace(/https?:\/\/\S+/g, '')
+                .replace(/[*_#`]/g, '')
+                .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '');
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang = 'en-IN'; u.rate = 1.02; u.pitch = 1.05;
+    const vs = window.speechSynthesis.getVoices();
+    const pick = vs.find(v => /female|Google UK English Female|en-IN/i.test(v.name + v.lang)) || vs.find(v => v.lang === 'en-IN');
+    if (pick) u.voice = pick;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch (e) {}
+}
 const micBtn = document.getElementById('mic-btn');
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (SR) {
@@ -467,6 +485,7 @@ if (SR) {
   rec.onresult = e => {
     const transcript = e.results[0][0].transcript;
     inp.value = transcript;
+    voiceReply = true;   // user spoke → speak the reply back
     micBtn.textContent = '🎤';
     micBtn.classList.remove('listening');
     micBtn.disabled = false;
@@ -525,6 +544,7 @@ async function send() {
     typing.remove();
     const riyaRow = addBubble(data.reply, 'riya');
     if (data.properties && data.properties.length > 0) addCards(data.properties);
+    if (voiceReply) { speak(data.reply); voiceReply = false; }   // talk back if they spoke
     // Land the view on the START of Riya's reply so the user reads top-to-bottom,
     // instead of being thrown to the very bottom of the property cards.
     requestAnimationFrame(() => riyaRow.scrollIntoView({ behavior: 'smooth', block: 'start' }));
