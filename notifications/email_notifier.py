@@ -62,6 +62,47 @@ def _send(to: str, subject: str, html_body: str, plain_body: str) -> bool:
         return False
 
 
+def send_calendar_invite(to: str, subject: str, html_body: str, plain_body: str, ics_string: str) -> bool:
+    """Send an email carrying a real calendar invite (.ics) so the buyer can add the visit
+    to their own Google/Apple/Outlook calendar in one tap. Free via Gmail SMTP."""
+    sender, password = _get_credentials()
+    if not sender:
+        logger.warning("GMAIL creds not set — calendar invite email skipped")
+        return False
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = f"Riya Real Estate <{sender}>"
+    msg["To"] = to
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(plain_body, "plain"))
+    alt.attach(MIMEText(html_body, "html"))
+    cal_part = MIMEText(ics_string, "calendar")
+    cal_part.set_param("method", "REQUEST")
+    alt.attach(cal_part)
+    msg.attach(alt)
+
+    ics_attach = MIMEBase("text", "calendar")
+    ics_attach.set_payload(ics_string)
+    encoders.encode_base64(ics_attach)
+    ics_attach.add_header("Content-Disposition", "attachment; filename=property-visit.ics")
+    msg.attach(ics_attach)
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(sender, password)
+            server.sendmail(sender, to, msg.as_string())
+        logger.info(f"Calendar invite sent to {to}")
+        return True
+    except Exception as e:
+        logger.error(f"Calendar invite failed to {to}: {e}")
+        return False
+
+
 # ── Broker lead alert ──────────────────────────────────────────────────────────
 
 def notify_broker_email(lead: dict, requirements: dict, broker_email: str | None) -> bool:

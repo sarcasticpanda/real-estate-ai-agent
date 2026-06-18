@@ -482,9 +482,16 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
         profile["email"] = email
         conv.requirements["_profile"] = profile
         name = profile.get("name") or user_name or "there"
+        _dt = None
+        if conv.requirements.get("_last_visit_dt"):
+            try:
+                from datetime import datetime as _datetime
+                _dt = _datetime.fromisoformat(conv.requirements["_last_visit_dt"])
+            except Exception:
+                _dt = None
         _send_visit_confirmation_email(email, name, conv.requirements.get("_last_visit_when", "your visit"),
                                        conv.requirements.get("area") or "Lucknow",
-                                       conv.requirements.get("_last_gcal"))
+                                       conv.requirements.get("_last_gcal"), _dt)
         return f"Done — I've emailed the visit details and a calendar invite to {email}. 📧", []
 
     # ── Reschedule an already-booked visit ("can we change the time?") ───────
@@ -1066,6 +1073,26 @@ def _extract_email(text: str) -> str | None:
     return m.group(0) if m else None
 
 
+def _build_ics(dt, title: str, description: str, location: str, attendee_email: str | None = None) -> str:
+    """A minimal valid .ics invite (floating local time) with a 1-hour reminder."""
+    from datetime import timedelta
+    import uuid as _uuid
+    start = dt.strftime("%Y%m%dT%H%M%S")
+    end = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+    stamp = dt.strftime("%Y%m%dT%H%M%S")
+    uid = f"{_uuid.uuid4().hex}@riya-realestate"
+    att = f"ATTENDEE;CN={attendee_email};RSVP=TRUE:mailto:{attendee_email}\r\n" if attendee_email else ""
+    return (
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Riya Real Estate//EN\r\nMETHOD:REQUEST\r\n"
+        "BEGIN:VEVENT\r\n"
+        f"UID:{uid}\r\nDTSTAMP:{stamp}\r\nDTSTART:{start}\r\nDTEND:{end}\r\n"
+        f"SUMMARY:{title}\r\nDESCRIPTION:{description}\r\nLOCATION:{location}\r\n"
+        f"{att}STATUS:CONFIRMED\r\n"
+        "BEGIN:VALARM\r\nTRIGGER:-PT1H\r\nACTION:DISPLAY\r\nDESCRIPTION:Property visit reminder\r\nEND:VALARM\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+
+
 def _gcal_link(dt, title: str, details: str = "", location: str = "Lucknow") -> str | None:
     """A free 'Add to Google Calendar' link (no API/OAuth) the buyer can tap to add the
     visit to THEIR own calendar."""
@@ -1106,6 +1133,20 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         return VISIT_SKIP_TEMPLATE.format(name=name, phone=phone)
 
     dt, when = _parse_visit_time(user_message)
+
+    # Real availability check against our own bookings — "is that slot free?"
+    if dt:
+        from database.supabase_client import meeting_slot_taken
+        try:
+            if meeting_slot_taken(dt.isoformat(), exclude_id=pending.get("meeting_id")):
+                from datetime import timedelta
+                alt = dt + timedelta(hours=1)
+                return (f"Ah, {name}, *{when}* just got taken. The slot at "
+                        f"*{_fmt_visit(alt)}* is open though — shall I lock that in, or would "
+                        "another day suit you better?")
+        except Exception as e:
+            logger.warning(f"availability check failed (continuing): {e}")
+
     fields = {
         "property_id": pending.get("property_id"),
         "status": "pending",
@@ -1136,29 +1177,39 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     gcal = _gcal_link(dt, "Property visit with Riya", f"Visit arranged via Riya. {when}.", f"{area}, Lucknow") if dt else None
     conv.requirements["_last_visit_when"] = when
     conv.requirements["_last_gcal"] = gcal
+    conv.requirements["_last_visit_dt"] = dt.isoformat() if dt else None
     cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if gcal else ""
 
-    # Email confirmation if we have their address; otherwise offer to send one.
+    # Email confirmation (with a real .ics invite) if we have their address; else offer it.
     if profile.get("email"):
-        _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal)
-        cal_line += f"  ·  ✉️ details sent to {profile['email']}"
+        _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal, dt)
+        cal_line += f"  ·  ✉️ invite emailed to {profile['email']}"
     else:
-        cal_line += "  ·  ✉️ want it emailed? just share your email"
+        cal_line += "  ·  ✉️ want a calendar invite by email? just share your email"
 
     property_part = " for the property you liked" if pending.get("property_id") else ""
     base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
     return base + cal_line
 
 
-def _send_visit_confirmation_email(email: str, name: str, when: str, area: str, gcal: str | None) -> None:
+def _send_visit_confirmation_email(email: str, name: str, when: str, area: str, gcal: str | None, dt=None) -> None:
     try:
-        from notifications.email_notifier import _send
-        cal = f'<p><a href="{gcal}">Add to your calendar</a></p>' if gcal else ""
-        html = (f"<p>Hi {name},</p><p>Your property visit is noted for <b>{when}</b> in {area}. "
-                f"Our consultant will call to confirm.</p>{cal}<p>— Riya</p>")
-        plain = f"Hi {name},\n\nYour property visit is noted for {when} in {area}. " \
-                f"Our consultant will call to confirm.\n{('Add to calendar: ' + gcal) if gcal else ''}\n\n— Riya"
-        _send(email, f"Your property visit — {when}", html, plain)
+        from notifications.email_notifier import _send, send_calendar_invite
+        cal = f'<p>📅 <a href="{gcal}">Add to your calendar</a></p>' if gcal else ""
+        html = (f"<p>Hi {name},</p><p>Your property visit is confirmed for <b>{when}</b> in {area}. "
+                f"Our consultant will call you shortly to finalise it.</p>{cal}"
+                f"<p>The calendar invite is attached — just open it to add the visit to your calendar.</p>"
+                f"<p>— Riya, your property assistant</p>")
+        plain = (f"Hi {name},\n\nYour property visit is confirmed for {when} in {area}. "
+                 f"Our consultant will call you shortly.\n"
+                 f"{('Add to calendar: ' + gcal) if gcal else ''}\n\n— Riya")
+        subject = f"Your property visit — {when}"
+        if dt:
+            ics = _build_ics(dt, "Property visit with Riya",
+                             f"Visit in {area}. Riya will confirm by phone.", f"{area}, Lucknow", email)
+            send_calendar_invite(email, subject, html, plain, ics)   # real .ics invite
+        else:
+            _send(email, subject, html, plain)
     except Exception as e:
         logger.warning(f"visit confirmation email failed: {e}")
 

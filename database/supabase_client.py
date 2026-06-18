@@ -228,6 +228,27 @@ def get_lead(lead_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
+def meeting_slot_taken(dt_iso: str, window_minutes: int = 45, exclude_id: str | None = None) -> bool:
+    """True if a (non-cancelled) visit is already booked within ±window of this time —
+    a free, DB-based availability check so the agent can say 'is that slot free?'."""
+    from datetime import datetime, timedelta
+    try:
+        dt = datetime.fromisoformat(dt_iso)
+    except Exception:
+        return False
+    lo = (dt - timedelta(minutes=window_minutes)).isoformat()
+    hi = (dt + timedelta(minutes=window_minutes)).isoformat()
+    client = get_client()
+    rows = (client.table("meetings").select("id,status")
+            .gte("scheduled_at", lo).lte("scheduled_at", hi).execute().data) or []
+    for r in rows:
+        if r.get("id") == exclude_id:
+            continue
+        if (r.get("status") or "").lower() != "cancelled":
+            return True
+    return False
+
+
 def get_upcoming_meetings(hours_ahead: int = 24) -> list[dict]:
     """Get meetings scheduled within the next N hours (for reminders)."""
     client = get_client()
