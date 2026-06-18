@@ -927,6 +927,44 @@ async def broker_listings_page():
     return _BROKER_LISTINGS_HTML
 
 
+# ── Broker: analytics ────────────────────────────────────────────────────────
+
+@app.get("/broker/analytics")
+async def broker_analytics(token: str):
+    _check_broker_token(token)
+    from datetime import datetime, timezone, timedelta
+    from collections import Counter
+    try:
+        leads = get_all_leads(limit=1000)
+        props = list_properties(limit=1000)
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+        def _recent(l):
+            try:
+                return datetime.fromisoformat(str(l.get("created_at")).replace("Z", "+00:00")) >= week_ago
+            except Exception:
+                return False
+
+        by_status = Counter((l.get("status") or "new").lower() for l in leads)
+        converted = by_status.get("converted", 0) + by_status.get("visit", 0)
+        top_areas = Counter(l.get("preferred_area") for l in leads if l.get("preferred_area")).most_common(5)
+        prop_status = Counter((p.get("status") or "available").lower() for p in props)
+
+        return {
+            "leads_total": len(leads),
+            "leads_this_week": sum(1 for l in leads if _recent(l)),
+            "leads_by_status": dict(by_status),
+            "conversion_rate": round(100 * converted / len(leads), 1) if leads else 0,
+            "top_areas": [{"area": a, "count": c} for a, c in top_areas],
+            "properties_total": len(props),
+            "properties_available": prop_status.get("available", 0),
+            "properties_sold": prop_status.get("sold", 0) + prop_status.get("booked", 0),
+        }
+    except Exception as e:
+        logger.error(f"broker_analytics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 _BROKER_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Broker Dashboard — Riya</title>
@@ -957,6 +995,7 @@ a.call{color:#0f766e;text-decoration:none;font-weight:600}
   <button class="btn-load" onclick="load()">Load leads</button>
   <span id="count" style="color:#64748b;font-size:13px"></span>
 </div>
+<div id="stats" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px"></div>
 <div id="list"></div>
 <script>
 const STATUSES=['new','contacted','visit','converted','lost'];
@@ -969,6 +1008,7 @@ async function load(){
   if(!r.ok){document.getElementById('list').innerHTML='<div class="empty">Unauthorized or error.</div>';return;}
   const d=await r.json();const leads=d.leads||[];
   document.getElementById('count').textContent=leads.length+' lead'+(leads.length==1?'':'s');
+  loadStats();
   const el=document.getElementById('list');
   if(!leads.length){el.innerHTML='<div class="empty">No leads yet.</div>';return;}
   el.innerHTML='';
@@ -989,6 +1029,19 @@ async function load(){
 async function setStatus(id,status){
   const r=await fetch(`/broker/leads/${id}/status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status})});
   if(r.ok){load();}else{alert('Update failed');}
+}
+async function loadStats(){
+  const r=await fetch('/broker/analytics?token='+encodeURIComponent(tok()));
+  if(!r.ok)return;const a=await r.json();
+  const box=(label,val,col)=>`<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;min-width:110px">
+    <div style="font-size:22px;font-weight:800;color:${col||'#0f172a'}">${val}</div><div style="font-size:11px;color:#64748b">${label}</div></div>`;
+  const areas=(a.top_areas||[]).map(x=>x.area+' ('+x.count+')').join(', ')||'—';
+  document.getElementById('stats').innerHTML=
+    box('Leads total',a.leads_total,'#1d4ed8')+box('This week',a.leads_this_week,'#0f766e')+
+    box('Conversion',a.conversion_rate+'%','#166534')+box('Listings',a.properties_total)+
+    box('Available',a.properties_available,'#166534')+box('Sold',a.properties_sold,'#991b1b')+
+    `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;flex:1;min-width:180px">
+      <div style="font-size:12px;color:#64748b">Top areas by interest</div><div style="font-weight:600;font-size:13px;margin-top:4px">${areas}</div></div>`;
 }
 window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}};
 </script></body></html>"""
