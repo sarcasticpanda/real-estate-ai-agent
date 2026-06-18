@@ -315,7 +315,12 @@ def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict
             # Reset all search requirements on each session start so the bot asks
             # qualifying questions fresh instead of using stale session data.
             # Keep only _profile (name, phone) — discard old budget/area/BHK/flags.
+            # Reset the search on reload, but KEEP the buyer's profile AND their saved
+            # shortlist (otherwise "Saved 2" in the UI but the bot thinks none are saved).
+            saved = conv.requirements.get("_shortlist") or []
             conv.requirements = {"_profile": profile}
+            if saved:
+                conv.requirements["_shortlist"] = saved
             conv.set_stage("discovery")
             if name:
                 return {"reply": f"Welcome back, {name}! What are you looking for today?", "properties": []}
@@ -1131,14 +1136,14 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     gcal = _gcal_link(dt, "Property visit with Riya", f"Visit arranged via Riya. {when}.", f"{area}, Lucknow") if dt else None
     conv.requirements["_last_visit_when"] = when
     conv.requirements["_last_gcal"] = gcal
-    cal_line = f"\n\n📅 Add it to your calendar: {gcal}" if gcal else ""
+    cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if gcal else ""
 
     # Email confirmation if we have their address; otherwise offer to send one.
     if profile.get("email"):
         _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal)
-        cal_line += f"\nI've also emailed the details to {profile['email']}."
+        cal_line += f"  ·  ✉️ details sent to {profile['email']}"
     else:
-        cal_line += "\n📧 Want an email confirmation too? Just share your email."
+        cal_line += "  ·  ✉️ want it emailed? just share your email"
 
     property_part = " for the property you liked" if pending.get("property_id") else ""
     base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
@@ -1420,9 +1425,18 @@ def _show_shortlist(conv: ConversationManager, user_name: str | None) -> tuple[s
             to_card({"id": r["id"], "data": r["data"], "score": 0, "similarity": 1.0})
             for r in result.data
         ]
-        name_part = f"{user_name}, you have" if user_name else "You have"
+        # Make these the "in focus" set so the buyer can now say "book the first one".
+        conv.requirements["_last_shown_cards"] = cards
+        conv.requirements["_last_shown_text"] = format_properties_for_llm(
+            [{"id": r["id"], "data": r["data"]} for r in result.data])
+        if cards:
+            conv.requirements["_liked_property_id"] = cards[0].get("id", "")
+        name_part = f"{user_name}, here are" if user_name else "Here are"
+        n = len(cards)
         return (
-            f"{name_part} {len(cards)} saved propert{'y' if len(cards) == 1 else 'ies'}. Here they are!",
+            f"{name_part} your {n} saved propert{'y' if n == 1 else 'ies'}. "
+            f"Would you like to book a visit for {'it' if n == 1 else 'any of them'}? "
+            "Just tell me which one.",
             cards,
         )
     except Exception as e:
