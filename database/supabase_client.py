@@ -413,6 +413,36 @@ def get_user_profile(session_id: str) -> dict:
     return {}
 
 
+def save_broker_confirmation(data: dict) -> dict:
+    """
+    Store a pending broker availability confirmation.
+    Keys: lead_id, meeting_id, broker_phone, buyer_name, buyer_phone,
+          property_id, proposed_dt (ISO), buyer_session_id, status (pending/yes/no)
+    """
+    client = get_client()
+    data["status"] = "pending"
+    data["created_at"] = "now()"
+    res = client.table("broker_confirmations").upsert(data).execute()
+    return res.data[0] if res.data else {}
+
+
+def get_pending_broker_confirmation(broker_phone: str) -> dict | None:
+    """Get the most recent pending confirmation for this broker phone."""
+    client = get_client()
+    phone = broker_phone.replace("+", "").replace(" ", "")
+    if not phone.startswith("91") and len(phone) == 10:
+        phone = "91" + phone
+    rows = (client.table("broker_confirmations").select("*")
+            .eq("broker_phone", phone).eq("status", "pending")
+            .order("created_at", desc=True).limit(1).execute().data)
+    return rows[0] if rows else None
+
+
+def update_broker_confirmation(conf_id: str, status: str) -> None:
+    client = get_client()
+    client.table("broker_confirmations").update({"status": status}).eq("id", conf_id).execute()
+
+
 def save_user_profile(session_id: str, profile: dict) -> None:
     """Persist user profile into session requirements._profile without overwriting other fields."""
     client = get_client()

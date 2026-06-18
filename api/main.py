@@ -1317,6 +1317,15 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
 
 async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str):
     from notifications.whatsapp_notifier import _send
+    # Check if this is a broker YES/NO reply to a pending availability confirmation FIRST.
+    # If so, handle it and don't run it through the buyer-facing agent.
+    try:
+        from agent.broker_confirmation import handle_broker_reply
+        if handle_broker_reply(sender_phone, text):
+            return  # handled — don't process as a normal buyer message
+    except Exception as e:
+        logger.warning(f"broker_reply check failed: {e}")
+
     try:
         result = process_message(session_id=session_id, user_message=text, platform="whatsapp")
         _send(sender_phone, result["reply"])

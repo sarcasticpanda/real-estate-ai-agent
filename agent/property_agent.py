@@ -1172,6 +1172,28 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
 
     _finish()
 
+    # ── Ping the broker via WhatsApp to confirm they're free ─────────────────
+    # This is the two-way scheduling flow: broker replies YES → meeting is locked in
+    # on both calendars; NO → buyer is asked to suggest another time.
+    try:
+        from database.supabase_client import get_broker_for_area
+        from agent.broker_confirmation import ask_broker_availability
+        area_for_broker = conv.requirements.get("area") or "Lucknow"
+        broker = get_broker_for_area(area_for_broker) or {}
+        if broker.get("phone"):
+            ask_broker_availability(
+                buyer_name=name,
+                buyer_phone=phone,
+                buyer_session_id=conv.session_id,
+                proposed_when=when,
+                proposed_dt=dt,
+                property_id=pending.get("property_id"),
+                lead_id=pending.get("lead_id"),
+                broker_phone=broker["phone"],
+            )
+    except Exception as e:
+        logger.warning(f"ask_broker_availability failed (non-fatal): {e}")
+
     # Free "add to your calendar" link the buyer can tap (no calendar account needed on our side).
     area = conv.requirements.get("area") or "Lucknow"
     gcal = _gcal_link(dt, "Property visit with Riya", f"Visit arranged via Riya. {when}.", f"{area}, Lucknow") if dt else None
