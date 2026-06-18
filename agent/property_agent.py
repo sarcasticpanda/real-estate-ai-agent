@@ -469,6 +469,35 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     if conv.stage == "scheduling":
         return _handle_scheduling(conv, user_message, user_name), []
 
+    # ── Buyer sends an email after booking → confirm + calendar invite by mail ──
+    if conv.requirements.get("_last_meeting_id") and _extract_email(user_message) \
+            and not conv.requirements.get("_liked_property_id_changed"):
+        email = _extract_email(user_message)
+        profile = conv.requirements.get("_profile") or {}
+        profile["email"] = email
+        conv.requirements["_profile"] = profile
+        name = profile.get("name") or user_name or "there"
+        _send_visit_confirmation_email(email, name, conv.requirements.get("_last_visit_when", "your visit"),
+                                       conv.requirements.get("area") or "Lucknow",
+                                       conv.requirements.get("_last_gcal"))
+        return f"Done — I've emailed the visit details and a calendar invite to {email}. 📧", []
+
+    # ── Reschedule an already-booked visit ("can we change the time?") ───────
+    if _RESCHEDULE_RE.search(user_message) and conv.requirements.get("_last_meeting_id"):
+        profile = conv.requirements.get("_profile") or {}
+        conv.requirements["_pending_meeting"] = {
+            "meeting_id": conv.requirements["_last_meeting_id"],
+            "lead_id": conv.requirements.get("_last_lead_id"),
+            "property_id": conv.requirements.get("_liked_property_id"),
+            "phone": profile.get("phone", ""),
+            "name": profile.get("name") or user_name,
+            "reschedule": True,
+        }
+        conv.set_stage("scheduling")
+        nm = (profile.get("name") or user_name or "")
+        return (f"Sure{', ' + nm if nm else ''} — what new day and time would suit you better? "
+                "(e.g. \"Sunday afternoon\" or \"Monday 6 pm\")"), []
+
     # ── After completed lead, allow new search (post_lead cooldown) ──────────
     if conv.stage in ("done", "post_lead"):
         remaining = conv.requirements.get("_post_lead_turns", 0)
@@ -603,10 +632,9 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             conv.requirements["bhk"] = None
             conv.requirements["property_type"] = None
 
-    # ── Strong intent -> move to lead capture ─────────────────────────────────
+    # ── Strong intent -> book ────────────────────────────────────────────────
     if lead_level == "strong":
-        # Capture WHICH property they want before collecting contact, so the broker
-        # gets a lead with the actual listing attached (not None).
+        # Capture WHICH property they want so the broker gets the actual listing.
         ref = _resolve_referenced_property_id(user_message, conv)
         if ref:
             conv.requirements["_liked_property_id"] = ref
@@ -614,6 +642,11 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             cards = conv.requirements.get("_last_shown_cards") or []
             if cards:
                 conv.requirements["_liked_property_id"] = cards[0].get("id", "")
+        # If we already have their name + phone, DON'T ask again — go straight to
+        # picking a visit time.
+        profile = conv.requirements.get("_profile") or {}
+        if profile.get("name") and profile.get("phone"):
+            return _begin_scheduling(conv, profile["name"], profile["phone"]), []
         conv.set_stage("lead_capture")
         return _ask_for_contact(conv, user_name), []
 
@@ -957,7 +990,15 @@ def _handle_lead_capture(
     user_name: str | None,
 ) -> str:
     from agent.lead_collector import is_fake_phone
+    profile = conv.requirements.get("_profile") or {}
     name, phone = extract_name_and_phone(user_message)
+    email = _extract_email(user_message)
+    # Fall back to anything we already know about this buyer.
+    name = name or profile.get("name")
+    phone = phone or profile.get("phone")
+    if email:
+        profile["email"] = email
+        conv.requirements["_profile"] = profile
 
     # Reject obviously bogus numbers (9999999999, 1234567890) before saving a junk lead.
     if phone and is_fake_phone(phone):
@@ -965,36 +1006,10 @@ def _handle_lead_capture(
                 "your 10-digit mobile number so our consultant can reach you?")
 
     if name and phone:
-        liked_id = conv.requirements.get("_liked_property_id")
-        lead = create_lead(
-            session_id=conv.session_id,
-            requirements=conv.requirements,
-            name=name,
-            phone=phone,
-            property_id=liked_id,
-        )
-        if lead:
-            # (broker is already notified inside create_lead via email/WhatsApp; the old
-            # n8n webhook call hit a dead localhost and only produced error noise.)
-            profile = conv.requirements.get("_profile") or {}
-            profile["name"] = name
-            profile["phone"] = phone
-            conv.requirements["_profile"] = profile
-            # Move into scheduling: collect a preferred visit time so the broker can
-            # confirm an actual slot (a real meeting record), not just "we'll call you".
-            conv.requirements["_pending_meeting"] = {
-                "lead_id": lead.get("id"),
-                "property_id": conv.requirements.get("_liked_property_id"),
-                "phone": phone,
-                "name": name,
-            }
-            conv.set_stage("scheduling")
-            return ASK_VISIT_TIME_TEMPLATE.format(name=name)
-        else:
-            return "Apologies, something went wrong. Could you share your name and number once more?"
+        return _begin_scheduling(conv, name, phone)
 
     if phone:
-        return "Got your number! Could you also share your name? Our consultant would like to address you properly."
+        return "Got your number! And what name should I note it under?"
 
     messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
@@ -1002,22 +1017,79 @@ def _handle_lead_capture(
         "role": "user",
         "content": (
             "The buyer wants to proceed but hasn't shared their name and phone yet. "
-            "Gently ask again — one warm, professional sentence."
+            "Gently ask for their name and 10-digit mobile in one warm sentence."
         ),
     })
     return _llm(messages, temperature=0.5, max_tokens=120)
 
 
+def _begin_scheduling(conv: ConversationManager, name: str, phone: str) -> str:
+    """Save the lead (using whatever we know) and move into collecting a visit time.
+    Shared by the lead-capture handler and the 'already have your details' fast path."""
+    liked_id = conv.requirements.get("_liked_property_id")
+    lead = create_lead(
+        session_id=conv.session_id, requirements=conv.requirements,
+        name=name, phone=phone, property_id=liked_id,
+    )
+    profile = conv.requirements.get("_profile") or {}
+    profile["name"] = name
+    profile["phone"] = phone
+    conv.requirements["_profile"] = profile
+    conv.requirements["_pending_meeting"] = {
+        "lead_id": lead.get("id") if lead else None,
+        "property_id": liked_id, "phone": phone, "name": name,
+    }
+    conv.set_stage("scheduling")
+    return ASK_VISIT_TIME_TEMPLATE.format(name=name)
+
+
 _SKIP_VISIT_RE = re.compile(r"^\s*(skip|later|not now|no thanks?|nah|call me|you call|whenever|"
                             r"any ?time|flexible|don'?t know|not sure)\b", re.IGNORECASE)
 
+# "change the time", "reschedule", "different slot" — adjust an already-booked visit.
+_RESCHEDULE_RE = re.compile(
+    r"\b(reschedul\w*|change .{0,14}(time|slot|date|day|booking|appointment|visit)|"
+    r"different (time|day|date|slot)|another (time|day|slot|date)|move .{0,14}(visit|appointment|booking|slot)|"
+    r"new (time|slot|date)|can we change|push .{0,10}(time|visit))\b",
+    re.IGNORECASE,
+)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+
+
+def _extract_email(text: str) -> str | None:
+    m = _EMAIL_RE.search(text or "")
+    return m.group(0) if m else None
+
+
+def _gcal_link(dt, title: str, details: str = "", location: str = "Lucknow") -> str | None:
+    """A free 'Add to Google Calendar' link (no API/OAuth) the buyer can tap to add the
+    visit to THEIR own calendar."""
+    if not dt:
+        return None
+    from datetime import timedelta
+    import urllib.parse
+    start = dt.strftime("%Y%m%dT%H%M%S")
+    end = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
+    q = urllib.parse.urlencode({
+        "action": "TEMPLATE", "text": title, "dates": f"{start}/{end}",
+        "details": details, "location": location,
+    })
+    return f"https://calendar.google.com/calendar/render?{q}"
+
 
 def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: str | None) -> str:
-    """Collect the buyer's preferred visit time and create a real meeting record."""
-    from database.supabase_client import save_meeting
+    """Collect/adjust the buyer's preferred visit time and create or update the meeting."""
+    from database.supabase_client import save_meeting, update_meeting
     pending = conv.requirements.get("_pending_meeting") or {}
+    profile = conv.requirements.get("_profile") or {}
     name = pending.get("name") or user_name or "there"
     phone = pending.get("phone", "")
+
+    # If they slip in an email here, capture it (so we can email a confirmation).
+    em = _extract_email(user_message)
+    if em:
+        profile["email"] = em
+        conv.requirements["_profile"] = profile
 
     def _finish():
         conv.set_stage("post_lead")
@@ -1029,22 +1101,61 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         return VISIT_SKIP_TEMPLATE.format(name=name, phone=phone)
 
     dt, when = _parse_visit_time(user_message)
-    meeting = {
-        "lead_id": pending.get("lead_id"),
+    fields = {
         "property_id": pending.get("property_id"),
         "status": "pending",
         "notes": f"Buyer requested visit: {user_message.strip()[:200]}",
     }
     if dt:
-        meeting["scheduled_at"] = dt.isoformat()
+        fields["scheduled_at"] = dt.isoformat()
+
+    meeting_id = pending.get("meeting_id")
     try:
-        save_meeting(meeting)
+        if meeting_id:                      # reschedule → update the same meeting
+            update_meeting(meeting_id, fields)
+        else:
+            fields["lead_id"] = pending.get("lead_id")
+            saved = save_meeting(fields)
+            meeting_id = (saved or {}).get("id")
     except Exception as e:
-        logger.error(f"save_meeting failed: {e}")
+        logger.error(f"save/update meeting failed: {e}")
+
+    if meeting_id:
+        conv.requirements["_last_meeting_id"] = meeting_id
+        conv.requirements["_last_lead_id"] = pending.get("lead_id")
 
     _finish()
+
+    # Free "add to your calendar" link the buyer can tap (no calendar account needed on our side).
+    area = conv.requirements.get("area") or "Lucknow"
+    gcal = _gcal_link(dt, "Property visit with Riya", f"Visit arranged via Riya. {when}.", f"{area}, Lucknow") if dt else None
+    conv.requirements["_last_visit_when"] = when
+    conv.requirements["_last_gcal"] = gcal
+    cal_line = f"\n\n📅 Add it to your calendar: {gcal}" if gcal else ""
+
+    # Email confirmation if we have their address; otherwise offer to send one.
+    if profile.get("email"):
+        _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal)
+        cal_line += f"\nI've also emailed the details to {profile['email']}."
+    else:
+        cal_line += "\n📧 Want an email confirmation too? Just share your email."
+
     property_part = " for the property you liked" if pending.get("property_id") else ""
-    return VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
+    base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
+    return base + cal_line
+
+
+def _send_visit_confirmation_email(email: str, name: str, when: str, area: str, gcal: str | None) -> None:
+    try:
+        from notifications.email_notifier import _send
+        cal = f'<p><a href="{gcal}">Add to your calendar</a></p>' if gcal else ""
+        html = (f"<p>Hi {name},</p><p>Your property visit is noted for <b>{when}</b> in {area}. "
+                f"Our consultant will call to confirm.</p>{cal}<p>— Riya</p>")
+        plain = f"Hi {name},\n\nYour property visit is noted for {when} in {area}. " \
+                f"Our consultant will call to confirm.\n{('Add to calendar: ' + gcal) if gcal else ''}\n\n— Riya"
+        _send(email, f"Your property visit — {when}", html, plain)
+    except Exception as e:
+        logger.warning(f"visit confirmation email failed: {e}")
 
 
 def _parse_visit_time(text: str):
