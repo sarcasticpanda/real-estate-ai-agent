@@ -214,6 +214,20 @@ def save_meeting(meeting: dict) -> dict:
     return result.data[0] if result.data else {}
 
 
+def update_meeting(meeting_id: str, fields: dict) -> dict:
+    client = get_client()
+    res = client.table("meetings").update(fields).eq("id", meeting_id).execute()
+    return res.data[0] if res.data else {}
+
+
+def get_lead(lead_id: str) -> dict | None:
+    if not lead_id:
+        return None
+    client = get_client()
+    rows = client.table("leads").select("*").eq("id", lead_id).limit(1).execute().data
+    return rows[0] if rows else None
+
+
 def get_upcoming_meetings(hours_ahead: int = 24) -> list[dict]:
     """Get meetings scheduled within the next N hours (for reminders)."""
     client = get_client()

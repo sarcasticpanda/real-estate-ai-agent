@@ -927,6 +927,15 @@ async def broker_listings_page():
     return _BROKER_LISTINGS_HTML
 
 
+# ── Visit reminders (call daily from a free cron / n8n / Railway scheduler) ──
+
+@app.post("/cron/send-reminders")
+async def cron_send_reminders(token: str, hours_ahead: int = 24):
+    _check_broker_token(token)
+    from notifications.reminders import send_due_reminders
+    return send_due_reminders(hours_ahead=hours_ahead)
+
+
 # ── Broker: analytics ────────────────────────────────────────────────────────
 
 @app.get("/broker/analytics")
