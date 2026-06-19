@@ -115,22 +115,76 @@ def list_properties(limit: int = 300, broker_id: str | None = None) -> list[dict
     return out
 
 
-def update_property(property_id: str, price_inr: int | None = None, status: str | None = None) -> bool:
-    """Update a listing's price and/or availability (keeps data.pricing in sync)."""
+def update_property(property_id: str, price_inr: int | None = None, status: str | None = None,
+                    area_name: str | None = None, bhk: int | None = None,
+                    property_type: str | None = None, furnishing: str | None = None,
+                    area_sqft: int | None = None, description: str | None = None) -> bool:
+    """Update any combination of listing fields; keeps data sub-fields in sync."""
+    client = get_client()
+    cur = client.table("properties").select("data,area_name,bhk,property_type").eq("id", property_id).execute().data
+    if not cur:
+        return False
+    data = cur[0]["data"] or {}
+    update: dict = {}
+
+    if price_inr is not None:
+        data.setdefault("pricing", {})["total_price_inr"] = int(price_inr)
+        update["price_inr"] = int(price_inr)
+    if status is not None:
+        update["status"] = status
+    if area_name is not None:
+        update["area_name"] = area_name
+        data.setdefault("location", {})["area_name"] = area_name
+    if bhk is not None:
+        update["bhk"] = int(bhk)
+        data.setdefault("property_profile", {})["bedrooms"] = int(bhk)
+    if property_type is not None:
+        update["property_type"] = property_type
+    if furnishing is not None:
+        data.setdefault("property_profile", {})["furnishing"] = furnishing
+    if area_sqft is not None:
+        data.setdefault("property_profile", {})["builtup_area_sqft"] = int(area_sqft)
+    if description is not None:
+        data["description"] = description
+
+    if update or any(v is not None for v in [furnishing, area_sqft, description]):
+        update["data"] = data
+        client.table("properties").update(update).eq("id", property_id).execute()
+    return True
+
+
+def delete_property(property_id: str) -> bool:
+    """
+    Hard delete a property: removes all images from Supabase Storage,
+    then deletes the DB row (embeddings cascade via FK or we ignore the orphan).
+    """
+    import urllib.parse
     client = get_client()
     cur = client.table("properties").select("data").eq("id", property_id).execute().data
     if not cur:
         return False
-    update: dict = {}
-    if price_inr is not None:
-        data = cur[0]["data"]
-        data.setdefault("pricing", {})["total_price_inr"] = int(price_inr)
-        update["price_inr"] = int(price_inr)
-        update["data"] = data
-    if status is not None:
-        update["status"] = status
-    if update:
-        client.table("properties").update(update).eq("id", property_id).execute()
+    data = cur[0]["data"] or {}
+    images = data.get("images") or []
+
+    # Delete owned images from Storage
+    storage_paths = []
+    for url in images:
+        if IMAGES_BUCKET in (url or ""):
+            try:
+                parsed = urllib.parse.urlparse(url)
+                parts = parsed.path.split(f"{IMAGES_BUCKET}/", 1)
+                if len(parts) == 2:
+                    storage_paths.append(parts[1].split("?")[0])
+            except Exception:
+                pass
+    if storage_paths:
+        try:
+            client.storage.from_(IMAGES_BUCKET).remove(storage_paths)
+        except Exception as e:
+            import logging; logging.getLogger(__name__).warning(f"Storage cleanup partial: {e}")
+
+    # Delete the property row (embeddings table references via property_id text, not FK — leave it)
+    client.table("properties").delete().eq("id", property_id).execute()
     return True
 
 

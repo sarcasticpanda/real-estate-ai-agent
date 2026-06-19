@@ -40,7 +40,7 @@ from broker.upload_handler import process_csv, create_property_from_fields
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
-    delete_property_image, reorder_property_images, replace_unsplash_images,
+    delete_property_image, reorder_property_images, replace_unsplash_images, delete_property,
     upload_property_document, add_document_to_property, get_property_documents,
     get_session, save_session, get_all_leads, mark_property_booked,
     list_properties, update_property,
@@ -1142,14 +1142,26 @@ async def broker_list_properties(token: str, broker: str | None = None):
 class PropertyUpdate(BaseModel):
     token: str
     price_inr: int | None = None
-    status: str | None = None     # available | booked | sold | unavailable
+    status: str | None = None       # available | booked | sold | unavailable
+    area_name: str | None = None
+    bhk: int | None = None
+    property_type: str | None = None
+    furnishing: str | None = None
+    area_sqft: int | None = None
+    description: str | None = None
 
 
 @app.post("/broker/properties/{property_id}/update")
 async def broker_update_property(property_id: str, req: PropertyUpdate):
     _check_broker_token(req.token)
     try:
-        ok = update_property(property_id, price_inr=req.price_inr, status=req.status)
+        ok = update_property(
+            property_id,
+            price_inr=req.price_inr, status=req.status,
+            area_name=req.area_name, bhk=req.bhk,
+            property_type=req.property_type, furnishing=req.furnishing,
+            area_sqft=req.area_sqft, description=req.description,
+        )
         if not ok:
             raise HTTPException(status_code=404, detail="Property not found")
         return {"ok": True}
@@ -1158,6 +1170,25 @@ async def broker_update_property(property_id: str, req: PropertyUpdate):
     except Exception as e:
         logger.error(f"broker_update_property error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class PropertyDeleteReq(BaseModel):
+    token: str
+
+
+@app.delete("/broker/properties/{property_id}")
+async def broker_delete_property(property_id: str, req: PropertyDeleteReq):
+    """Hard delete: removes all Storage images then the DB row."""
+    _check_broker_token(req.token)
+    ok = delete_property(property_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Property not found")
+    return {"ok": True}
+
+
+@app.get("/broker/edit/{property_id}", response_class=HTMLResponse)
+async def broker_edit_page(property_id: str):
+    return _broker_edit_html(property_id)
 
 
 @app.get("/broker/listings", response_class=HTMLResponse)
@@ -1461,6 +1492,88 @@ def _image_manager_html(property_id: str) -> str:
         "  const d=await r.json();"
         "  document.getElementById('st').textContent=d.uploaded+' image(s) uploaded!';load();}"
         "window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};"
+        "</script></body></html>"
+    )
+
+
+def _broker_edit_html(property_id: str) -> str:
+    pid = property_id
+    return (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Edit Property</title><style>"
+        "*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f1f5f9;padding:18px;max-width:600px;margin:auto}"
+        "h1{font-size:20px;color:#1d4ed8;margin-bottom:4px}.sub{color:#64748b;font-size:13px;margin-bottom:14px}"
+        ".box{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:14px}"
+        "label{display:block;font-size:12px;font-weight:600;color:#475569;margin:8px 0 3px}"
+        "input,select,textarea{width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px}"
+        "textarea{height:80px;resize:vertical}"
+        ".row{display:flex;gap:10px}.row>div{flex:1}"
+        "button{cursor:pointer;border:none;border-radius:8px;padding:9px 14px;font-size:14px;font-weight:700}"
+        ".bp{background:#1d4ed8;color:#fff}.bd{background:#fee2e2;color:#991b1b;margin-left:8px}"
+        ".st{font-size:13px;margin-top:8px}"
+        "</style></head><body>"
+        "<h1>Edit Property</h1>"
+        "<div class='sub'><a href='/broker/listings'>← My listings</a> &nbsp;·&nbsp; "
+        "<a href='/broker/images/" + pid + "'>Manage photos</a></div>"
+        "<div class='box'>"
+        "<label>Broker token</label><input id='tok' type='password' placeholder='token'>"
+        "<div class='row'>"
+        "<div><label>Price (₹)</label><input id='price' type='number' placeholder='e.g. 8500000'></div>"
+        "<div><label>BHK</label><input id='bhk' type='number' min='1' max='10' placeholder='3'></div>"
+        "</div>"
+        "<div class='row'>"
+        "<div><label>Area name</label><input id='area' placeholder='Gomti Nagar'></div>"
+        "<div><label>Area sqft</label><input id='sqft' type='number' placeholder='1200'></div>"
+        "</div>"
+        "<div class='row'>"
+        "<div><label>Type</label><select id='type'><option>Flat</option><option>Independent House</option>"
+        "<option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option></select></div>"
+        "<div><label>Furnishing</label><select id='furn'><option>Furnished</option>"
+        "<option>Semi-Furnished</option><option>Unfurnished</option></select></div>"
+        "</div>"
+        "<label>Status</label><select id='status'><option value='available'>Available</option>"
+        "<option value='booked'>Booked</option><option value='sold'>Sold</option>"
+        "<option value='unavailable'>Unavailable</option></select>"
+        "<label>Description</label><textarea id='desc' placeholder='Update property details...'></textarea>"
+        "<div style='margin-top:12px'>"
+        "<button class='bp' onclick='save()'>Save changes</button>"
+        "<button class='bd' onclick='del()'>Delete property</button>"
+        "</div>"
+        "<div id='st' class='st'></div>"
+        "</div>"
+        "<script>"
+        "const PID='" + pid + "';"
+        "function tok(){return document.getElementById('tok').value.trim();}"
+        "async function load(){"
+        "  const r=await fetch('/broker/properties?token='+encodeURIComponent(tok()));"
+        "  const d=await r.json();const p=(d.properties||[]).find(x=>x.id===PID);"
+        "  if(!p){document.getElementById('st').textContent='Property not found';return;}"
+        "  if(p.price_inr)document.getElementById('price').value=p.price_inr;"
+        "  if(p.bhk)document.getElementById('bhk').value=p.bhk;"
+        "  if(p.area_name)document.getElementById('area').value=p.area_name;"
+        "  if(p.property_type)document.getElementById('type').value=p.property_type;"
+        "  if(p.status)document.getElementById('status').value=p.status;"
+        "}"
+        "async function save(){"
+        "  const body={token:tok()};"
+        "  const price=document.getElementById('price').value;if(price)body.price_inr=+price;"
+        "  const bhk=document.getElementById('bhk').value;if(bhk)body.bhk=+bhk;"
+        "  const area=document.getElementById('area').value;if(area)body.area_name=area;"
+        "  const sqft=document.getElementById('sqft').value;if(sqft)body.area_sqft=+sqft;"
+        "  body.property_type=document.getElementById('type').value;"
+        "  body.furnishing=document.getElementById('furn').value;"
+        "  body.status=document.getElementById('status').value;"
+        "  const desc=document.getElementById('desc').value;if(desc)body.description=desc;"
+        "  const r=await fetch('/broker/properties/'+PID+'/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
+        "  const d=await r.json();"
+        "  document.getElementById('st').textContent=d.ok?'Saved!':'Error saving';}"
+        "async function del(){"
+        "  if(!confirm('Permanently delete this property and all its images? This cannot be undone.'))return;"
+        "  const r=await fetch('/broker/properties/'+PID,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});"
+        "  if(r.ok)window.location='/broker/listings';"
+        "  else document.getElementById('st').textContent='Delete failed';}"
+        "window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}else{document.getElementById('tok').addEventListener('change',load);}};;"
         "</script></body></html>"
     )
 
@@ -1786,7 +1899,7 @@ async function load(){
     const c=document.createElement('div');c.className='card';
     c.innerHTML=`<div class="top"><div>
        <div class="t">${p.bhk?p.bhk+' BHK ':''}${p.property_type||''} · ${p.area_name||''}</div>
-       <div class="meta">${money(p.price_inr)} · 📷 ${p.images} · 📄 ${p.documents} · <a href="/broker/images/${p.id}" target="_blank" style="color:#1d4ed8;font-size:11px">Manage photos</a></div></div>
+       <div class="meta">${money(p.price_inr)} · 📷 ${p.images} · 📄 ${p.documents} · <a href="/broker/images/${p.id}" style="color:#1d4ed8;font-size:11px">Photos</a> · <a href="/broker/edit/${p.id}" style="color:#7c3aed;font-size:11px">Edit / Delete</a></div></div>
        <span class="pill s-${st}">${st}</span></div>
       <div class="row">
         <input type="number" id="pr_${p.id}" placeholder="new price ₹" value="${p.price_inr||''}">
