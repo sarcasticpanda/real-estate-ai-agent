@@ -1243,6 +1243,149 @@ async def broker_analytics(token: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/broker/analytics/visual", response_class=HTMLResponse)
+async def broker_analytics_visual():
+    return _BROKER_ANALYTICS_VISUAL_HTML
+
+
+@app.get("/api/broker/analytics/charts")
+async def broker_analytics_charts(token: str):
+    """Rich analytics data for the visual dashboard."""
+    _check_broker_token(token)
+    from database.supabase_client import get_client
+    from collections import Counter
+    import datetime
+
+    cl = get_client()
+    leads = cl.table("leads").select("status,created_at,preferred_area,preferred_bhk,budget_max").execute().data or []
+    meetings = cl.table("meetings").select("status,scheduled_at,created_at").execute().data or []
+    props = cl.table("properties").select("status,property_type,area_name").execute().data or []
+
+    stage_order = ["new","contacted","visit","met","negotiating","won","waiting","lost"]
+    stage_labels = {"new":"New","contacted":"Contacted","visit":"Scheduled","met":"Visited",
+                    "negotiating":"Negotiating","won":"Won","waiting":"Waiting","lost":"Lost"}
+    funnel = {s: 0 for s in stage_order}
+    for l in leads:
+        st = (l.get("status") or "new").lower()
+        if st in funnel:
+            funnel[st] += 1
+
+    area_counts = Counter(
+        l.get("preferred_area","").split(",")[0].strip()
+        for l in leads if l.get("preferred_area")
+    )
+    top_areas = [{"area": k, "count": v} for k, v in area_counts.most_common(8) if k]
+
+    bhk_counts = Counter(str(l.get("preferred_bhk","?")) for l in leads if l.get("preferred_bhk"))
+    bhk_data = [{"label": k+"BHK", "count": v} for k, v in sorted(bhk_counts.items())]
+
+    now = datetime.datetime.utcnow()
+    weekly = Counter()
+    for l in leads:
+        try:
+            dt = datetime.datetime.fromisoformat(l["created_at"].replace("Z",""))
+            w = (now - dt).days // 7
+            if w < 8:
+                weekly[w] += 1
+        except Exception:
+            pass
+    weekly_data = [{"week": f"W-{i}", "count": weekly.get(i,0)} for i in range(7,-1,-1)]
+
+    prop_status = Counter((p.get("status") or "available").lower() for p in props)
+    prop_types = Counter((p.get("property_type") or "other").lower() for p in props)
+
+    total = len(leads)
+    won = sum(1 for l in leads if (l.get("status") or "").lower() == "won")
+
+    return {
+        "summary": {
+            "total_leads": total, "meetings": len(meetings),
+            "properties": len(props), "won": won,
+            "conversion_pct": round(won/total*100,1) if total else 0,
+            "available_props": prop_status.get("available",0),
+        },
+        "funnel": [{"stage": stage_labels.get(s,s), "count": funnel[s]} for s in stage_order],
+        "top_areas": top_areas,
+        "bhk": bhk_data,
+        "weekly": weekly_data,
+        "prop_types": [{"type": k, "count": v} for k, v in prop_types.most_common(6)],
+    }
+
+
+_BROKER_ANALYTICS_VISUAL_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analytics — Riya</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f1f5f9;color:#0f172a}
+header{background:#1d4ed8;color:#fff;padding:12px 18px;display:flex;gap:14px;align-items:center}
+header h1{font-size:18px;flex:1}header a{color:#bfdbfe;font-size:12px;text-decoration:none}
+.bar{display:flex;gap:8px;padding:10px 16px;background:#fff;border-bottom:1px solid #e2e8f0;align-items:center}
+.bar input{padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:160px}
+.bar button{padding:7px 13px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;padding:14px 16px}
+.kpi{background:#fff;border-radius:12px;padding:14px;border:1px solid #e2e8f0;text-align:center}
+.kpi-v{font-size:28px;font-weight:800;color:#1d4ed8}.kpi-l{font-size:12px;color:#64748b;margin-top:2px}
+.charts{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:0 16px 20px}
+.chart-box{background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:14px}
+.chart-box h2{font-size:14px;font-weight:700;color:#334155;margin-bottom:10px}
+</style></head><body>
+<header>
+  <h1>Analytics</h1>
+  <a href="/broker">dashboard</a>
+  <a href="/broker/pipeline">pipeline</a>
+</header>
+<div class="bar">
+  <input id="tok" type="password" placeholder="Broker token">
+  <button onclick="load()">Load</button>
+</div>
+<div class="kpis" id="kpis"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Lead Funnel</h2><canvas id="cFunnel" height="220"></canvas></div>
+  <div class="chart-box"><h2>Top Areas</h2><canvas id="cAreas" height="220"></canvas></div>
+  <div class="chart-box"><h2>BHK Demand</h2><canvas id="cBhk" height="220"></canvas></div>
+  <div class="chart-box"><h2>New Leads per Week</h2><canvas id="cWeekly" height="220"></canvas></div>
+  <div class="chart-box"><h2>Property Types</h2><canvas id="cTypes" height="220"></canvas></div>
+</div>
+<script>
+function tok(){return document.getElementById('tok').value.trim();}
+const COLORS=['#1d4ed8','#0891b2','#7c3aed','#d97706','#16a34a','#dc2626','#64748b','#ea580c'];
+async function load(){
+  localStorage.setItem('btok',tok());
+  const r=await fetch('/api/broker/analytics/charts?token='+encodeURIComponent(tok()));
+  if(!r.ok){alert('Error: check token');return;}
+  const d=await r.json();
+  // KPIs
+  const ks=[
+    ['Total Leads',d.summary.total_leads],['Meetings',d.summary.meetings],
+    ['Won',d.summary.won],[d.summary.conversion_pct+'%','Conversion'],
+    ['Properties',d.summary.properties],['Available',d.summary.available_props],
+  ];
+  document.getElementById('kpis').innerHTML=ks.map(([v,l])=>
+    '<div class="kpi"><div class="kpi-v">'+v+'</div><div class="kpi-l">'+l+'</div></div>').join('');
+  // Charts
+  mkBar('cFunnel',d.funnel.map(x=>x.stage),d.funnel.map(x=>x.count),'Leads');
+  mkHBar('cAreas',d.top_areas.map(x=>x.area),d.top_areas.map(x=>x.count),'Leads');
+  mkDoughnut('cBhk',d.bhk.map(x=>x.label),d.bhk.map(x=>x.count));
+  mkLine('cWeekly',d.weekly.map(x=>x.week),d.weekly.map(x=>x.count),'New leads');
+  mkDoughnut('cTypes',d.prop_types.map(x=>x.type),d.prop_types.map(x=>x.count));
+}
+function mkBar(id,labels,data,lbl){
+  new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{label:lbl,data,backgroundColor:COLORS[0]}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+}
+function mkHBar(id,labels,data,lbl){
+  new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{label:lbl,data,backgroundColor:COLORS}]},options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0}}}}});
+}
+function mkLine(id,labels,data,lbl){
+  new Chart(document.getElementById(id),{type:'line',data:{labels,datasets:[{label:lbl,data,borderColor:COLORS[0],backgroundColor:COLORS[0]+'33',fill:true,tension:.3}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+}
+function mkDoughnut(id,labels,data){
+  new Chart(document.getElementById(id),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:COLORS}]},options:{plugins:{legend:{position:'right'}}}});
+}
+window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElementById('tok').value=s;load();}};
+</script></body></html>"""
+
+
 _BROKER_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Broker Dashboard — Riya</title>
@@ -1266,7 +1409,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:1
 .empty{color:#64748b;text-align:center;padding:40px}
 a.call{color:#0f766e;text-decoration:none;font-weight:600}
 </style></head><body>
-<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/pipeline">Pipeline</a> · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/pipeline">Pipeline</a> · <a href="/broker/analytics/visual">Analytics</a> · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
   <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
