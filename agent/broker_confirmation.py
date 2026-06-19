@@ -13,12 +13,15 @@ Pipeline:
 
 import logging
 import re
+import os
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_YES_RE = re.compile(r"^\s*(yes|ha|haan|yeah|yep|sure|ok|okay|confirm|confirmed|free|done|y)\s*[.!]*\s*$", re.I)
-_NO_RE  = re.compile(r"^\s*(no|nope|nahi|na|busy|not free|can'?t|cannot|sorry|unavailable|n)\s*[.!]*\s*$", re.I)
+_YES_RE        = re.compile(r"^\s*(yes|ha|haan|yeah|yep|sure|ok|okay|confirm|confirmed|free|done|y)\s*[.!]*\s*$", re.I)
+_NO_RE         = re.compile(r"^\s*(no|nope|nahi|na|busy|not free|can'?t|cannot|sorry|unavailable|n)\s*[.!]*\s*$", re.I)
+_RESCHEDULE_RE = re.compile(r"\b(reschedule|change.{0,10}time|different.{0,10}slot|new.{0,10}time|move.{0,10}to|shift.{0,10}to)\b", re.I)
+_BROKER_PHONE  = os.environ.get("BROKER_WHATSAPP_PHONE", os.environ.get("WHATSAPP_BROKER_PHONE", ""))
 
 
 def ask_broker_availability(
@@ -164,6 +167,78 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
         logger.info(f"Broker {broker_phone} declined {proposed_when}")
         return True
 
-    # Any other text — broker might be suggesting an alternative or asking a question.
-    # Don't consume it; let the normal agent handle it as a free-text conversation.
+    # Any other text — check if broker is trying to reschedule
+    if _RESCHEDULE_RE.search(reply_text):
+        return handle_broker_reschedule(broker_phone, reply_text, conf)
+
+    # Otherwise don't consume it; let the normal agent handle it.
     return False
+
+
+def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = None) -> bool:
+    """
+    Broker texts something like "reschedule Arjun to Friday 4pm" or
+    "change time to Thursday 6pm". We parse the new time, update the meeting,
+    resend .ics to the buyer, and confirm to the broker.
+    Returns True if we handled it.
+    """
+    from notifications.whatsapp_notifier import _send
+    from database.supabase_client import update_meeting, get_client
+    from agent.property_agent import _parse_visit_time, _build_ics, _gcal_link, _send_visit_confirmation_email
+
+    # Try to find the most recent confirmed meeting for this broker
+    if conf is None:
+        from database.supabase_client import get_pending_broker_confirmation
+        conf = get_pending_broker_confirmation(broker_phone)
+
+    if not conf:
+        # Try looking up any recent meeting associated with this broker
+        # (fall back to a generic "tell me the buyer name / new time" prompt)
+        _send(broker_phone,
+              "Sure — to reschedule, please reply:\n"
+              "*RESCHEDULE [buyer phone] to [new day and time]*\n"
+              "e.g. RESCHEDULE 9876543210 to Friday 5pm")
+        return True
+
+    dt, when = _parse_visit_time(text)
+    if not dt:
+        _send(broker_phone,
+              "I couldn't read the new time. Please reply like:\n"
+              "*Thursday 4pm* or *25 Jun at 6 pm*")
+        return True
+
+    meeting_id = conf.get("meeting_id")
+    buyer_phone = conf.get("buyer_phone","")
+    buyer_name  = conf.get("buyer_name","the buyer")
+    buyer_sid   = conf.get("buyer_session_id","")
+    proposed_when = when
+
+    try:
+        if meeting_id:
+            update_meeting(meeting_id, {"scheduled_at": dt.isoformat(), "status": "rescheduled"})
+    except Exception as e:
+        logger.error(f"update_meeting on reschedule: {e}")
+
+    # Notify buyer via WhatsApp
+    if buyer_phone:
+        _send(buyer_phone,
+              f"Hi {buyer_name}, your property visit has been rescheduled to *{proposed_when}*. "
+              "Same property — see you there!")
+
+    # Email buyer new .ics if we have their email
+    if buyer_sid:
+        try:
+            from database.supabase_client import get_session
+            sess = get_session(buyer_sid)
+            buyer_email = ((sess.get("requirements") or {}).get("_profile") or {}).get("email")
+            if buyer_email:
+                gcal = _gcal_link(dt, "Property visit", f"Rescheduled visit on {proposed_when}", "Lucknow")
+                _send_visit_confirmation_email(buyer_email, buyer_name, proposed_when, "Lucknow", gcal, dt)
+        except Exception as e:
+            logger.warning(f"Could not email buyer on reschedule: {e}")
+
+    _send(broker_phone,
+          f"Done! Rescheduled to *{proposed_when}*. "
+          f"{buyer_name} has been notified on WhatsApp.")
+    logger.info(f"Broker {broker_phone} rescheduled meeting {meeting_id} to {proposed_when}")
+    return True
