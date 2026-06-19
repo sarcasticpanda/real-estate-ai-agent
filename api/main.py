@@ -1011,6 +1011,11 @@ def _check_broker_token(token: str | None):
         raise HTTPException(status_code=401, detail="Invalid broker token")
 
 
+@app.get("/broker/pipeline", response_class=HTMLResponse)
+async def broker_pipeline_page():
+    return _BROKER_PIPELINE_HTML
+
+
 @app.get("/broker/leads")
 async def broker_leads(token: str, status: str = "all"):
     """All leads for the dashboard (newest first). status: all|new|contacted|visit|converted."""
@@ -1230,7 +1235,7 @@ button{cursor:pointer;border:none;border-radius:8px;padding:8px 12px;font-size:1
 .empty{color:#64748b;text-align:center;padding:40px}
 a.call{color:#0f766e;text-decoration:none;font-weight:600}
 </style></head><body>
-<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
+<h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/pipeline">Pipeline</a> · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
   <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
@@ -1458,6 +1463,131 @@ def _image_manager_html(property_id: str) -> str:
         "window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};"
         "</script></body></html>"
     )
+
+
+_BROKER_PIPELINE_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lead Pipeline</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f1f5f9;color:#0f172a;min-height:100vh}
+header{background:#1d4ed8;color:#fff;padding:12px 18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+header h1{font-size:18px;flex:1}header a{color:#bfdbfe;font-size:12px;text-decoration:none}
+.bar{display:flex;gap:8px;padding:10px 16px;background:#fff;border-bottom:1px solid #e2e8f0;align-items:center}
+.bar input{padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;width:160px}
+.bar button{padding:7px 13px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer}
+.board{display:flex;gap:10px;padding:14px 16px;overflow-x:auto;min-height:80vh}
+.col{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;min-width:220px;flex:0 0 220px;display:flex;flex-direction:column}
+.col-hdr{padding:10px 12px;font-weight:700;font-size:13px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center}
+.col-hdr .cnt{background:#e2e8f0;border-radius:99px;padding:1px 8px;font-size:11px}
+.cards{padding:8px;flex:1;min-height:60px}
+.cards.drag-over{background:#eff6ff;border-radius:8px}
+.lcard{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:grab;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.lcard:active{cursor:grabbing}.lcard.dragging{opacity:.4}
+.lname{font-weight:700;font-size:14px}.lphone{color:#0f766e;font-size:12px;font-weight:600}
+.lmeta{color:#64748b;font-size:11px;margin:3px 0 6px}
+.lbtns{display:flex;gap:5px;flex-wrap:wrap}
+.lbtns a,.lbtns button{font-size:11px;padding:3px 7px;border-radius:6px;border:1px solid #e2e8f0;background:#f8fafc;cursor:pointer;color:#334155;text-decoration:none}
+.lbtns .wa{background:#dcfce7;border-color:#86efac;color:#166534}
+.sold-warn{background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:6px;display:none}
+</style></head><body>
+<header>
+  <h1>Lead Pipeline</h1>
+  <a href="/broker">dashboard</a>
+  <a href="/broker/leads?token=broker">list view</a>
+</header>
+<div class="bar">
+  <input id="tok" type="password" placeholder="Broker token">
+  <button onclick="load()">Load</button>
+  <span id="st" style="font-size:12px;color:#64748b;margin-left:8px"></span>
+</div>
+<div class="board" id="board"></div>
+<script>
+const STAGES=[
+  {id:'new',label:'New',color:'#1d4ed8'},
+  {id:'contacted',label:'Contacted',color:'#0891b2'},
+  {id:'visit',label:'Visit Scheduled',color:'#7c3aed'},
+  {id:'met',label:'Site Visit Done',color:'#d97706'},
+  {id:'negotiating',label:'Negotiating',color:'#ea580c'},
+  {id:'won',label:'Bought / Won',color:'#16a34a'},
+  {id:'waiting',label:'Waiting / Hold',color:'#6b7280'},
+  {id:'lost',label:'Not Interested',color:'#dc2626'},
+];
+function tok(){return document.getElementById('tok').value.trim();}
+let _leads=[];
+
+async function load(){
+  localStorage.setItem('btok',tok());
+  const r=await fetch('/broker/leads?token='+encodeURIComponent(tok())+'&status=all');
+  const d=await r.json();
+  _leads=d.leads||[];
+  document.getElementById('st').textContent=_leads.length+' leads';
+  render();
+}
+
+function render(){
+  const board=document.getElementById('board');
+  board.innerHTML='';
+  STAGES.forEach(s=>{
+    const col=document.createElement('div');col.className='col';col.dataset.stage=s.id;
+    const items=_leads.filter(l=>l.status===s.id);
+    col.innerHTML='<div class="col-hdr" style="border-top:3px solid '+s.color+'"><span>'+s.label+'</span><span class="cnt">'+items.length+'</span></div><div class="cards" id="cards-'+s.id+'"></div>';
+    board.appendChild(col);
+    const wrap=document.getElementById('cards-'+s.id);
+    items.forEach(l=>wrap.appendChild(makeCard(l)));
+    // drag target
+    wrap.addEventListener('dragover',e=>{e.preventDefault();wrap.classList.add('drag-over');});
+    wrap.addEventListener('dragleave',()=>wrap.classList.remove('drag-over'));
+    wrap.addEventListener('drop',e=>{
+      e.preventDefault();wrap.classList.remove('drag-over');
+      const id=e.dataTransfer.getData('lid');
+      const newStatus=s.id;
+      moveCard(id,newStatus);
+    });
+  });
+}
+
+function makeCard(l){
+  const c=document.createElement('div');c.className='lcard';c.draggable=true;c.dataset.id=l.id;
+  const phone=l.phone||'';
+  const wa='https://wa.me/91'+phone.replace(/[^0-9]/g,'');
+  const budget=l.budget_max?'up to Rs.'+(l.budget_max/1e7).toFixed(1)+'Cr':'';
+  const prop=l.interested_property_id?l.interested_property_id.replace('rag_property_',''):'';
+  c.innerHTML='<div class="lname">'+l.name+'</div>'
+    +'<div class="lphone">'+phone+'</div>'
+    +'<div class="lmeta">'+(l.preferred_bhk?l.preferred_bhk+'BHK · ':'')+budget+(prop?' · Prop: '+prop:'')+'</div>'
+    +'<div class="lbtns">'
+    +'<a href="'+wa+'" class="wa" target="_blank">WhatsApp</a>'
+    +(phone?'<a href="tel:'+phone+'">Call</a>':'')
+    +'<button onclick="note(\''+l.id+'\')">Note</button>'
+    +'</div>';
+  c.addEventListener('dragstart',e=>{e.dataTransfer.setData('lid',l.id);c.classList.add('dragging');});
+  c.addEventListener('dragend',()=>c.classList.remove('dragging'));
+  return c;
+}
+
+async function moveCard(leadId,newStatus){
+  const r=await fetch('/broker/leads/'+leadId+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status:newStatus})});
+  if(r.ok){
+    const lead=_leads.find(l=>l.id===leadId);
+    if(lead)lead.status=newStatus;
+    render();
+    if(newStatus==='won'){
+      const prop=lead&&lead.interested_property_id;
+      if(prop&&confirm('Deal closed! Mark property '+prop+' as sold (removes from search)?')){
+        await fetch('/broker/properties/'+prop+'/sold',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});
+      }
+    }
+  }
+}
+
+async function note(id){
+  const txt=prompt('Add note:');if(!txt)return;
+  await fetch('/broker/leads/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status:_leads.find(l=>l.id===id)?.status,notes:txt})});
+  load();
+}
+
+window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};
+</script></body></html>"""
 
 
 _BROWSE_HTML = """<!DOCTYPE html>
