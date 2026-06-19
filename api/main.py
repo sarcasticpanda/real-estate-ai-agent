@@ -569,7 +569,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div id="hdr">
     <div id="hdr-left">
       <h1>Riya - Real Estate AI</h1>
-      <p>Find your dream home in Lucknow</p>
+      <p>Find your dream home in Lucknow &nbsp;·&nbsp; <a href="/properties/browse" style="color:#93c5fd;font-size:12px">Browse all properties</a></p>
     </div>
     <button id="sl-btn" onclick="openShortlist()">&#10084;&#65039; Saved <span id="sl-count">0</span></button>
   </div>
@@ -943,6 +943,59 @@ function closeShortlist() {
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+# ── Public property browse page ───────────────────────────────────────────────
+
+@app.get("/properties/browse", response_class=HTMLResponse)
+async def properties_browse():
+    return _BROWSE_HTML
+
+
+@app.get("/api/properties/browse")
+async def api_browse(area: str = "", bhk: int = None, min_price: int = None,
+                     max_price: int = None, prop_type: str = "", limit: int = 30):
+    """Public endpoint for the browse page — no auth, direct DB query."""
+    from database.supabase_client import get_client
+    cl = get_client()
+    q = cl.table("properties").select(
+        "id,area_name,city,bhk,price_inr,property_type,status,data"
+    ).eq("status", "available").order("price_inr").limit(limit)
+    if bhk:
+        q = q.eq("bhk", bhk)
+    if prop_type:
+        q = q.ilike("property_type", f"%{prop_type}%")
+    if max_price:
+        q = q.lte("price_inr", max_price)
+    if min_price:
+        q = q.gte("price_inr", min_price)
+    if area:
+        q = q.ilike("area_name", f"%{area.replace(' ','')}%")
+    rows = q.execute().data or []
+
+    def fmt(p):
+        cr = p / 1e7
+        return f"Rs.{cr:.2f} Cr" if cr >= 1 else f"Rs.{p/1e5:.0f} L"
+
+    out = []
+    for r in rows:
+        d = r.get("data") or {}
+        imgs = d.get("images") or []
+        conn = d.get("connectivity") or {}
+        amen = d.get("amenities") or []
+        prof = d.get("property_profile") or {}
+        out.append({
+            "id": r["id"], "area": r.get("area_name"), "city": r.get("city"),
+            "bhk": r.get("bhk"), "price_inr": r.get("price_inr"),
+            "price_str": fmt(r["price_inr"]) if r.get("price_inr") else "POA",
+            "prop_type": r.get("property_type", ""),
+            "sqft": prof.get("builtup_area_sqft"),
+            "furnishing": prof.get("furnishing"),
+            "hero_img": imgs[0] if imgs else "",
+            "metro": conn.get("metro_distance_km"),
+            "amenities": amen[:4],
+        })
+    return {"properties": out, "count": len(out)}
 
 
 # ── Broker dashboard ─────────────────────────────────────────────────────────
@@ -1405,6 +1458,80 @@ def _image_manager_html(property_id: str) -> str:
         "window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;load();};"
         "</script></body></html>"
     )
+
+
+_BROWSE_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Browse Properties — Riya Lucknow</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f1f5f9;color:#0f172a}
+header{background:#1d4ed8;color:#fff;padding:14px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+header h1{font-size:20px;flex:1}header a{color:#bfdbfe;font-size:13px;text-decoration:none}
+.filters{display:flex;gap:8px;flex-wrap:wrap;padding:14px 20px;background:#fff;border-bottom:1px solid #e2e8f0}
+.filters input,.filters select{padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px}
+.filters button{padding:8px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;padding:16px 20px}
+.card{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.card img{width:100%;height:170px;object-fit:cover;background:#e2e8f0}
+.cbody{padding:12px}
+.ctitle{font-weight:700;font-size:15px}.cprice{color:#1d4ed8;font-weight:800;font-size:16px;margin:4px 0}
+.cmeta{color:#64748b;font-size:12px;margin-bottom:8px}
+.chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.chip{background:#f1f5f9;border-radius:6px;padding:2px 7px;font-size:11px;color:#475569}
+.actions{display:flex;gap:6px}.btn-chat{flex:1;padding:8px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;text-align:center;text-decoration:none;display:block}
+.btn-chat:hover{background:#1558b0}.empty{text-align:center;padding:60px;color:#64748b}
+#count{color:#64748b;font-size:13px;padding:6px 20px}
+</style></head><body>
+<header>
+  <div><h1>Riya — Properties in Lucknow</h1><div style="font-size:12px;color:#bfdbfe">Find your dream home</div></div>
+  <a href="/">💬 Chat with Riya</a>
+</header>
+<div class="filters">
+  <input id="area" placeholder="Area (e.g. Gomti Nagar)" style="width:170px">
+  <select id="bhk"><option value="">Any BHK</option><option>1</option><option>2</option><option>3</option><option>4</option></select>
+  <select id="type"><option value="">Any type</option><option>Flat</option><option>Independent House</option><option>Villa</option><option>Builder Floor</option><option>Plot</option></select>
+  <input id="min" type="number" placeholder="Min ₹ (lakh)" style="width:110px">
+  <input id="max" type="number" placeholder="Max ₹ (lakh)" style="width:110px">
+  <button onclick="load()">Search</button>
+</div>
+<div id="count"></div>
+<div id="grid" class="grid"></div>
+<script>
+async function load(){
+  const area=document.getElementById('area').value.trim();
+  const bhk=document.getElementById('bhk').value;
+  const type=document.getElementById('type').value;
+  const minL=parseFloat(document.getElementById('min').value)||0;
+  const maxL=parseFloat(document.getElementById('max').value)||0;
+  let url='/api/properties/browse?limit=60';
+  if(area)url+='&area='+encodeURIComponent(area);
+  if(bhk)url+='&bhk='+bhk;
+  if(type)url+='&prop_type='+encodeURIComponent(type);
+  if(minL)url+='&min_price='+Math.round(minL*1e5);
+  if(maxL)url+='&max_price='+Math.round(maxL*1e5);
+  const r=await fetch(url);const d=await r.json();
+  const ps=d.properties||[];
+  document.getElementById('count').textContent=ps.length+' properties found';
+  const g=document.getElementById('grid');
+  if(!ps.length){g.innerHTML='<div class="empty">No properties found — try different filters or <a href=\"/\">chat with Riya</a>.</div>';return;}
+  g.innerHTML='';
+  ps.forEach(p=>{
+    const c=document.createElement('div');c.className='card';
+    const chips=(p.amenities||[]).map(a=>'<span class="chip">'+a+'</span>').join('');
+    const metro=p.metro?'📍Metro '+p.metro+' km · ':'';
+    c.innerHTML='<img src="'+(p.hero_img?p.hero_img+'?w=400':'')
+      +'" onerror="this.style.background=\'#e2e8f0\'">'
+      +'<div class="cbody">'
+      +'<div class="ctitle">'+(p.bhk||'')+' BHK '+(p.prop_type||'')+' &mdash; '+(p.area||p.city||'Lucknow')+'</div>'
+      +'<div class="cprice">'+(p.price_str||'POA')+'</div>'
+      +'<div class="cmeta">'+(p.sqft?p.sqft+' sqft · ':'')+(p.furnishing||'')+' · '+metro+(p.city||'Lucknow')+'</div>'
+      +'<div class="chips">'+chips+'</div>'
+      +'<div class="actions"><a class="btn-chat" href="/?ask='+encodeURIComponent('Tell me more about '+p.id)+'" target="_blank">💬 Ask Riya about this</a></div>'
+      +'</div>';
+    g.appendChild(c);});
+}
+window.onload=load;
+</script></body></html>"""
 
 
 _BROKER_UPLOAD_HTML = """<!DOCTYPE html>
