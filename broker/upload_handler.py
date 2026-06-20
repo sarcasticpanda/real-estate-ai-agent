@@ -137,6 +137,8 @@ def enrich_property(prop: dict) -> dict:
     city = prop["location"].get("city", "Lucknow")
     state = prop["location"].get("state", "Uttar Pradesh")
 
+    # Never retain coordinates or distances from a previous address when geocoding fails.
+    prop["connectivity"] = {"status": "pending_enrichment"}
     coords = geocode_address(address, city, state)
     if not coords:
         logger.warning(f"Could not geocode {prop['doc_id']} — saving without distances")
@@ -163,6 +165,63 @@ def enrich_property(prop: dict) -> dict:
         "enrichment_source": "overpass_api",
     }
     return prop
+
+
+def reenrich_property_location(property_id: str, address: str | None = None,
+                               city: str | None = None) -> dict:
+    """Recalculate coordinates, nearby POIs, semantic text, and embedding after an address edit."""
+    from database.supabase_client import get_client
+
+    client = get_client()
+    rows = client.table("properties").select("data,status").eq("id", property_id).limit(1).execute().data
+    if not rows:
+        return {"ok": False, "error": "Property not found"}
+
+    prop = rows[0].get("data") or {}
+    metadata = prop.setdefault("metadata", {})
+    final_address = (address or metadata.get("raw_full_address") or "").strip()
+    if not final_address:
+        return {"ok": False, "error": "Address is required for location enrichment"}
+    metadata["raw_full_address"] = final_address
+    location = prop.setdefault("location", {})
+    location["city"] = (city or location.get("city") or "Lucknow").strip()
+    location["area_name"] = final_address.split(",")[0].strip()
+    location["location_context"] = f"Property located in {final_address}, {location['city']}."
+
+    prop = enrich_property(prop)
+    semantic_text = build_semantic_text(prop)
+    embedding = embed_text(semantic_text)
+    client.table("properties").update({
+        "data": prop,
+        "semantic_text": semantic_text,
+        "embedding": embedding,
+        "area_name": location["area_name"],
+        "city": location["city"],
+    }).eq("id", property_id).execute()
+    return {
+        "ok": True,
+        "area_name": location["area_name"],
+        "city": location["city"],
+        "connectivity": prop.get("connectivity") or {},
+    }
+
+
+def refresh_property_index(property_id: str) -> dict:
+    """Refresh semantic text and embedding after a non-location property edit."""
+    from database.supabase_client import get_client
+
+    client = get_client()
+    rows = client.table("properties").select("data").eq("id", property_id).limit(1).execute().data
+    if not rows:
+        return {"ok": False, "error": "Property not found"}
+    prop = rows[0].get("data") or {}
+    semantic_text = build_semantic_text(prop)
+    embedding = embed_text(semantic_text)
+    client.table("properties").update({
+        "semantic_text": semantic_text,
+        "embedding": embedding,
+    }).eq("id", property_id).execute()
+    return {"ok": True}
 
 
 def process_csv(filepath: str, broker_id: str | None = None) -> dict:

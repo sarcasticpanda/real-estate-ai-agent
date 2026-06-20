@@ -1189,6 +1189,7 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
                 proposed_dt=dt,
                 property_id=pending.get("property_id"),
                 lead_id=pending.get("lead_id"),
+                meeting_id=meeting_id,
                 broker_phone=broker["phone"],
             )
     except Exception as e:
@@ -1203,11 +1204,7 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if gcal else ""
 
     # Email confirmation (with a real .ics invite) if we have their address; else offer it.
-    if profile.get("email"):
-        _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal, dt)
-        cal_line += f"  ·  ✉️ invite emailed to {profile['email']}"
-    else:
-        cal_line += "  ·  ✉️ want a calendar invite by email? just share your email"
+    cal_line = "\n\nI'll send the calendar invite as soon as the consultant confirms."
 
     property_part = " for the property you liked" if pending.get("property_id") else ""
     base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)

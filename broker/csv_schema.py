@@ -5,14 +5,14 @@ Defines the expected broker CSV format and validates uploads.
 # Required columns in the broker upload CSV
 REQUIRED_COLUMNS = {
     "property_type",   # flat | house | villa | plot | shop | office
-    "bhk",             # integer
     "price_inr",       # total price in rupees (e.g. 17000000)
-    "area_sqft",       # built-up area in sqft
     "address",         # full address or locality name
-    "city",            # e.g. Lucknow
 }
 
 OPTIONAL_COLUMNS = {
+    "bhk",                # integer; optional for plots/commercial listings
+    "area_sqft",          # built-up area in sqft
+    "city",               # defaults to Lucknow
     "furnishing",         # Furnished | Unfurnished | Semi-Furnished
     "facing",             # East | West | North | South
     "current_floor",      # integer

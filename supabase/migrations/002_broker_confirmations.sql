@@ -10,7 +10,7 @@ create table if not exists broker_confirmations (
   property_id      text,
   proposed_dt      timestamptz,
   proposed_when    text,           -- human-readable "Saturday 21 Jun at 5 pm"
-  status           text default 'pending', -- pending | yes | no
+  status           text default 'pending', -- pending | yes | no | rescheduled
   created_at       timestamptz default now()
 );
 

@@ -21,6 +21,12 @@ import os
 import sys
 import logging
 import tempfile
+import uuid
+import re
+import json
+import hmac
+import hashlib
+import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
@@ -36,13 +42,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent.property_agent import process_message
-from broker.upload_handler import process_csv, create_property_from_fields
+from broker.upload_handler import (
+    process_csv, create_property_from_fields, reenrich_property_location,
+    refresh_property_index,
+)
 from database.supabase_client import (
     update_lead_status, save_meeting, get_upcoming_meetings,
     upload_property_image, add_image_url_to_property, get_property_images,
     delete_property_image, reorder_property_images, replace_unsplash_images, delete_property,
     upload_property_document, add_document_to_property, get_property_documents,
-    get_session, save_session, get_all_leads, mark_property_booked,
+    get_session, save_session, get_all_leads, mark_property_sold,
     list_properties, update_property,
 )
 
@@ -181,6 +190,10 @@ async def get_shortlist(session_id: str):
 
 # ── Broker upload endpoint ────────────────────────────────────────────────────
 
+_UPLOAD_JOBS: dict[str, dict] = {}
+MAX_CSV_SIZE_MB = 10
+
+
 @app.post("/upload/preview")
 async def upload_preview(token: str = Form(...), file: UploadFile = File(...)):
     """
@@ -190,6 +203,8 @@ async def upload_preview(token: str = Form(...), file: UploadFile = File(...)):
     _check_broker_token(token)
     import csv, io, chardet
     raw = await file.read()
+    if len(raw) > MAX_CSV_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"CSV too large - max {MAX_CSV_SIZE_MB} MB")
     enc = chardet.detect(raw).get("encoding") or "utf-8"
     text = raw.decode(enc, errors="replace")
     reader = csv.DictReader(io.StringIO(text))
@@ -243,12 +258,26 @@ async def upload_properties(
     reviews/corrects it, then submits here with column_map as JSON.
     Geocoding (lat/lng) + Overpass POI distances run automatically per property.
     """
-    if not file.filename.endswith(".csv"):
+    _check_broker_token(token)
+    if not (file.filename or "").lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are accepted")
 
     content = await file.read()
+    if len(content) > MAX_CSV_SIZE_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"CSV too large - max {MAX_CSV_SIZE_MB} MB")
+    import csv as _csv, io as _io, chardet as _chardet
+    encoding = _chardet.detect(content).get("encoding") or "utf-8"
+    csv_text = content.decode(encoding, errors="replace")
+    parsed_rows = list(_csv.DictReader(_io.StringIO(csv_text)))
+    headers = _csv.DictReader(_io.StringIO(csv_text)).fieldnames or []
+    if not headers:
+        raise HTTPException(status_code=400, detail="CSV has no header row")
+    if not parsed_rows:
+        raise HTTPException(status_code=400, detail="CSV has no property rows")
+    if len(parsed_rows) > 500:
+        raise HTTPException(status_code=400, detail="CSV may contain at most 500 rows per import")
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode="wb")
-    tmp.write(content)
+    tmp.write(csv_text.encode("utf-8"))
     tmp.close()
 
     parsed_map = {}
@@ -256,19 +285,46 @@ async def upload_properties(
         import json as _json
         try:
             parsed_map = _json.loads(column_map)
-        except Exception:
-            pass
+        except Exception as e:
+            Path(tmp.name).unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=f"Invalid column mapping: {e}")
+        if not isinstance(parsed_map, dict):
+            Path(tmp.name).unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Column mapping must be a JSON object")
+        allowed_fields = {"property_type", "bhk", "price_inr", "area_sqft", "address", "city",
+                          "furnishing", "amenities", "broker_name", "broker_phone",
+                          "description", "external_ref"}
+        if any(k not in allowed_fields or v not in headers for k, v in parsed_map.items()):
+            Path(tmp.name).unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Column mapping contains an unknown field or CSV column")
+        missing = {"property_type", "price_inr", "address"} - set(parsed_map)
+        if missing:
+            Path(tmp.name).unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=f"Required mappings missing: {', '.join(sorted(missing))}")
 
-    background_tasks.add_task(_run_upload, tmp.name, broker_id, parsed_map)
+    job_id = uuid.uuid4().hex
+    _UPLOAD_JOBS[job_id] = {"status": "processing", "filename": file.filename}
+    background_tasks.add_task(_run_upload, job_id, tmp.name, broker_id, parsed_map)
 
     return {
         "status": "processing",
         "message": f"File '{file.filename}' received. Each property will be geocoded and enriched with POI distances. This takes ~2s per row.",
         "broker_id": broker_id,
+        "job_id": job_id,
     }
 
 
-def _run_upload(filepath: str, broker_id: str | None, column_map: dict | None = None) -> None:
+@app.get("/upload/status/{job_id}")
+async def upload_status(job_id: str, token: str):
+    _check_broker_token(token)
+    job = _UPLOAD_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Upload job not found")
+    return job
+
+
+def _run_upload(job_id: str, filepath: str, broker_id: str | None,
+                column_map: dict | None = None) -> None:
     """Run the full enrichment pipeline on a CSV file.
     column_map remaps arbitrary column names to canonical ones before processing."""
     import csv, io
@@ -296,8 +352,10 @@ def _run_upload(filepath: str, broker_id: str | None, column_map: dict | None = 
                 filepath = mapped_path
 
         result = process_csv(filepath, broker_id=broker_id)
+        _UPLOAD_JOBS[job_id] = {"status": "complete", **result}
         logger.info(f"Upload job complete: {result}")
     except Exception as e:
+        _UPLOAD_JOBS[job_id] = {"status": "failed", "error": str(e)}
         logger.error(f"Upload pipeline error: {e}")
     finally:
         Path(filepath).unlink(missing_ok=True)
@@ -389,7 +447,10 @@ MAX_IMAGE_SIZE_MB = 5
 
 
 @app.post("/properties/{property_id}/images")
-async def upload_image(property_id: str, file: UploadFile = File(...)):
+async def upload_image(property_id: str, token: str = Form(...), file: UploadFile = File(...)):
+    _check_broker_token(token)
+    if not get_property_images(property_id) and not _property_exists(property_id):
+        raise HTTPException(status_code=404, detail="Property not found")
     content_type = file.content_type or "image/jpeg"
     if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"Unsupported image type: {content_type}. Use JPEG/PNG/WebP.")
@@ -398,8 +459,7 @@ async def upload_image(property_id: str, file: UploadFile = File(...)):
     if len(file_bytes) > MAX_IMAGE_SIZE_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"Image too large — max {MAX_IMAGE_SIZE_MB} MB")
 
-    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}.get(content_type, "jpg")
-    filename = f"{file.filename or 'photo'}"
+    filename = _safe_image_filename(file.filename, content_type)
 
     public_url = upload_property_image(property_id, filename, file_bytes, content_type)
     if not public_url:
@@ -420,6 +480,8 @@ async def get_images(property_id: str):
 async def upload_images_multi(property_id: str, token: str = Form(...), files: list[UploadFile] = File(...)):
     """Upload multiple images at once. Drops Unsplash placeholders when real images are added."""
     _check_broker_token(token)
+    if not get_property_images(property_id) and not _property_exists(property_id):
+        raise HTTPException(status_code=404, detail="Property not found")
     uploaded = []
     for file in files[:10]:  # max 10 at once
         ct = file.content_type or "image/jpeg"
@@ -428,7 +490,7 @@ async def upload_images_multi(property_id: str, token: str = Form(...), files: l
         data = await file.read()
         if len(data) > MAX_IMAGE_SIZE_MB * 1024 * 1024:
             continue
-        url = upload_property_image(property_id, file.filename or "photo", data, ct)
+        url = upload_property_image(property_id, _safe_image_filename(file.filename, ct), data, ct)
         if url:
             uploaded.append(url)
     if uploaded:
@@ -459,6 +521,18 @@ async def reorder_images(property_id: str, req: ReorderImagesReq):
     _check_broker_token(req.token)
     ok = reorder_property_images(property_id, req.ordered_urls)
     return {"ok": ok}
+
+
+def _safe_image_filename(filename: str | None, content_type: str) -> str:
+    ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[content_type]
+    stem = Path(filename or "photo").stem
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-")[:60] or "photo"
+    return f"{uuid.uuid4().hex[:12]}-{stem}.{ext}"
+
+
+def _property_exists(property_id: str) -> bool:
+    from database.supabase_client import get_client
+    return bool(get_client().table("properties").select("id").eq("id", property_id).limit(1).execute().data)
 
 
 @app.get("/broker/images/{property_id}", response_class=HTMLResponse)
@@ -957,6 +1031,15 @@ async def api_browse(area: str = "", bhk: int = None, min_price: int = None,
                      max_price: int = None, prop_type: str = "", limit: int = 30):
     """Public endpoint for the browse page — no auth, direct DB query."""
     from database.supabase_client import get_client
+    if min_price is not None and min_price < 0:
+        raise HTTPException(status_code=400, detail="Minimum price cannot be negative")
+    if max_price is not None and max_price < 0:
+        raise HTTPException(status_code=400, detail="Maximum price cannot be negative")
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status_code=400, detail="Minimum price cannot exceed maximum price")
+    if bhk is not None and not 1 <= bhk <= 20:
+        raise HTTPException(status_code=400, detail="BHK must be between 1 and 20")
+    limit = max(1, min(limit, 100))
     cl = get_client()
     q = cl.table("properties").select(
         "id,area_name,city,bhk,price_inr,property_type,status,data"
@@ -970,7 +1053,7 @@ async def api_browse(area: str = "", bhk: int = None, min_price: int = None,
     if min_price:
         q = q.gte("price_inr", min_price)
     if area:
-        q = q.ilike("area_name", f"%{area.replace(' ','')}%")
+        q = q.ilike("area_name", f"%{area.strip()}%")
     rows = q.execute().data or []
 
     def fmt(p):
@@ -1003,11 +1086,14 @@ async def api_browse(area: str = "", bhk: int = None, min_price: int = None,
 # token (set BROKER_TOKEN in .env; defaults to "broker" for local use).
 
 def _broker_token() -> str:
-    return os.environ.get("BROKER_TOKEN", "broker")
+    return os.environ.get("BROKER_TOKEN", "")
 
 
 def _check_broker_token(token: str | None):
-    if token != _broker_token():
+    configured = _broker_token()
+    if not configured:
+        raise HTTPException(status_code=503, detail="BROKER_TOKEN is not configured")
+    if not token or not hmac.compare_digest(token, configured):
         raise HTTPException(status_code=401, detail="Invalid broker token")
 
 
@@ -1033,9 +1119,14 @@ class LeadStatusUpdate(BaseModel):
     notes: str | None = None
 
 
+PIPELINE_STAGES = {"new", "contacted", "visit", "met", "negotiating", "won", "waiting", "lost"}
+
+
 @app.post("/broker/leads/{lead_id}/status")
 async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
     _check_broker_token(req.token)
+    if req.status not in PIPELINE_STAGES:
+        raise HTTPException(status_code=400, detail="Invalid pipeline stage")
     try:
         update_lead_status(lead_id, req.status, req.notes)
         return {"ok": True}
@@ -1053,7 +1144,8 @@ async def broker_mark_sold(property_id: str, req: PropertySold):
     """Mark a property booked/sold so the bot stops recommending it."""
     _check_broker_token(req.token)
     try:
-        mark_property_booked(property_id)
+        if not mark_property_sold(property_id):
+            raise HTTPException(status_code=404, detail="Property not found")
         return {"ok": True}
     except Exception as e:
         logger.error(f"broker_mark_sold error: {e}")
@@ -1149,6 +1241,9 @@ class PropertyUpdate(BaseModel):
     furnishing: str | None = None
     area_sqft: int | None = None
     description: str | None = None
+    address: str | None = None
+    city: str | None = None
+    amenities: str | None = None
 
 
 @app.post("/broker/properties/{property_id}/update")
@@ -1161,10 +1256,20 @@ async def broker_update_property(property_id: str, req: PropertyUpdate):
             area_name=req.area_name, bhk=req.bhk,
             property_type=req.property_type, furnishing=req.furnishing,
             area_sqft=req.area_sqft, description=req.description,
+            amenities=([a.strip() for a in req.amenities.split(",") if a.strip()]
+                       if req.amenities is not None else None),
         )
         if not ok:
             raise HTTPException(status_code=404, detail="Property not found")
-        return {"ok": True}
+        if req.address is not None or req.city is not None or req.area_name is not None:
+            enrichment = reenrich_property_location(
+                property_id, req.address or req.area_name, req.city
+            )
+        else:
+            enrichment = refresh_property_index(property_id)
+        if not enrichment.get("ok"):
+            raise HTTPException(status_code=400, detail=enrichment.get("error", "Index refresh failed"))
+        return {"ok": True, "enrichment": enrichment}
     except HTTPException:
         raise
     except Exception as e:
@@ -1224,7 +1329,7 @@ async def broker_analytics(token: str):
                 return False
 
         by_status = Counter((l.get("status") or "new").lower() for l in leads)
-        converted = by_status.get("converted", 0) + by_status.get("visit", 0)
+        converted = by_status.get("won", 0)
         top_areas = Counter(l.get("preferred_area") for l in leads if l.get("preferred_area")).most_common(5)
         prop_status = Counter((p.get("status") or "available").lower() for p in props)
 
@@ -1285,7 +1390,7 @@ async def broker_analytics_charts(token: str):
         try:
             dt = datetime.datetime.fromisoformat(l["created_at"].replace("Z",""))
             w = (now - dt).days // 7
-            if w < 8:
+            if 0 <= w < 8:
                 weekly[w] += 1
         except Exception:
             pass
@@ -1299,7 +1404,8 @@ async def broker_analytics_charts(token: str):
 
     return {
         "summary": {
-            "total_leads": total, "meetings": len(meetings),
+            "total_leads": total,
+            "meetings": sum(1 for m in meetings if (m.get("status") or "").lower() == "confirmed"),
             "properties": len(props), "won": won,
             "conversion_pct": round(won/total*100,1) if total else 0,
             "available_props": prop_status.get("available",0),
@@ -1412,14 +1518,14 @@ a.call{color:#0f766e;text-decoration:none;font-weight:600}
 <h1>Broker Dashboard</h1><div class="sub">Riya — Real Estate AI · <a href="/broker/pipeline">Pipeline</a> · <a href="/broker/analytics/visual">Analytics</a> · <a href="/broker/add">+ Add property</a> · <a href="/broker/upload">Upload CSV</a> · <a href="/broker/listings">My listings</a></div>
 <div class="bar">
   <input id="tok" placeholder="Broker token" type="password">
-  <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Visit</option><option value="converted">Converted</option><option value="lost">Lost</option></select>
+  <select id="flt"><option value="all">All</option><option value="new">New</option><option value="contacted">Contacted</option><option value="visit">Scheduled</option><option value="met">Visited</option><option value="negotiating">Negotiating</option><option value="won">Won</option><option value="waiting">Waiting</option><option value="lost">Lost</option></select>
   <button class="btn-load" onclick="load()">Load leads</button>
   <span id="count" style="color:#64748b;font-size:13px"></span>
 </div>
 <div id="stats" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px"></div>
 <div id="list"></div>
 <script>
-const STATUSES=['new','contacted','visit','converted','lost'];
+const STATUSES=['new','contacted','visit','met','negotiating','won','waiting','lost'];
 function tok(){return document.getElementById('tok').value.trim();}
 async function load(){
   const t=tok(); if(!t){alert('Enter the broker token');return;}
@@ -1544,7 +1650,7 @@ async function addProp(){
 async function upImgs(){
   const files=document.getElementById('imgs').files;const t=document.getElementById('thumbs');
   for(const f of files){
-    const fd=new FormData();fd.append('file',f);
+    const fd=new FormData();fd.append('token',tok());fd.append('file',f);
     const r=await fetch('/properties/'+PID+'/images',{method:'POST',body:fd});
     if(r.ok){const d=await r.json();const im=document.createElement('img');im.src=d.image_url;t.appendChild(im);}
   }
@@ -1596,7 +1702,7 @@ def _image_manager_html(property_id: str) -> str:
         "<div class='drop' onclick='document.getElementById(\"fp\").click()'>Click or drag photos here (max 10 at once, 5MB each)</div>"
         "<div id='grid' class='grid'></div><div id='st' class='st'></div>"
         "<script>"
-        "const PID='" + pid + "';"
+        "const PID='" + pid + "';let ORIG_ADDRESS='',ORIG_CITY='Lucknow',ORIG_AREA='';"
         "function tok(){return document.getElementById('tok').value.trim();}"
         "async function load(){"
         "  const r=await fetch('/properties/'+PID+'/images');const d=await r.json();"
@@ -1670,6 +1776,10 @@ def _broker_edit_html(property_id: str) -> str:
         "<div><label>Area sqft</label><input id='sqft' type='number' placeholder='1200'></div>"
         "</div>"
         "<div class='row'>"
+        "<div><label>Full address (recalculates distances)</label><input id='address' placeholder='Gomti Nagar, Lucknow'></div>"
+        "<div><label>City</label><input id='city' value='Lucknow'></div>"
+        "</div>"
+        "<div class='row'>"
         "<div><label>Type</label><select id='type'><option>Flat</option><option>Independent House</option>"
         "<option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option></select></div>"
         "<div><label>Furnishing</label><select id='furn'><option>Furnished</option>"
@@ -1679,6 +1789,7 @@ def _broker_edit_html(property_id: str) -> str:
         "<option value='booked'>Booked</option><option value='sold'>Sold</option>"
         "<option value='unavailable'>Unavailable</option></select>"
         "<label>Description</label><textarea id='desc' placeholder='Update property details...'></textarea>"
+        "<label>Amenities (comma-separated)</label><input id='amenities' placeholder='Lift, Parking, Gym'></input>"
         "<div style='margin-top:12px'>"
         "<button class='bp' onclick='save()'>Save changes</button>"
         "<button class='bd' onclick='del()'>Delete property</button>"
@@ -1694,7 +1805,13 @@ def _broker_edit_html(property_id: str) -> str:
         "  if(!p){document.getElementById('st').textContent='Property not found';return;}"
         "  if(p.price_inr)document.getElementById('price').value=p.price_inr;"
         "  if(p.bhk)document.getElementById('bhk').value=p.bhk;"
-        "  if(p.area_name)document.getElementById('area').value=p.area_name;"
+        "  if(p.area_name){document.getElementById('area').value=p.area_name;ORIG_AREA=p.area_name;}"
+        "  if(p.address){document.getElementById('address').value=p.address;ORIG_ADDRESS=p.address;}"
+        "  if(p.city){document.getElementById('city').value=p.city;ORIG_CITY=p.city;}"
+        "  if(p.area_sqft)document.getElementById('sqft').value=p.area_sqft;"
+        "  if(p.furnishing)document.getElementById('furn').value=p.furnishing;"
+        "  if(p.description)document.getElementById('desc').value=p.description;"
+        "  if(p.amenities)document.getElementById('amenities').value=p.amenities.join(', ');"
         "  if(p.property_type)document.getElementById('type').value=p.property_type;"
         "  if(p.status)document.getElementById('status').value=p.status;"
         "}"
@@ -1702,15 +1819,19 @@ def _broker_edit_html(property_id: str) -> str:
         "  const body={token:tok()};"
         "  const price=document.getElementById('price').value;if(price)body.price_inr=+price;"
         "  const bhk=document.getElementById('bhk').value;if(bhk)body.bhk=+bhk;"
-        "  const area=document.getElementById('area').value;if(area)body.area_name=area;"
+        "  const area=document.getElementById('area').value;if(area&&area!==ORIG_AREA)body.area_name=area;"
+        "  const address=document.getElementById('address').value;if(address&&address!==ORIG_ADDRESS)body.address=address;"
+        "  const city=document.getElementById('city').value;if(city&&city!==ORIG_CITY)body.city=city;"
         "  const sqft=document.getElementById('sqft').value;if(sqft)body.area_sqft=+sqft;"
         "  body.property_type=document.getElementById('type').value;"
         "  body.furnishing=document.getElementById('furn').value;"
         "  body.status=document.getElementById('status').value;"
         "  const desc=document.getElementById('desc').value;if(desc)body.description=desc;"
+        "  body.amenities=document.getElementById('amenities').value;"
         "  const r=await fetch('/broker/properties/'+PID+'/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});"
         "  const d=await r.json();"
-        "  document.getElementById('st').textContent=d.ok?'Saved!':'Error saving';}"
+        "  const geo=d.enrichment&&d.enrichment.connectivity;"
+        "  document.getElementById('st').textContent=d.ok?(geo&&geo.status==='enriched'?'Saved! Coordinates and nearby distances recalculated.':'Saved and search index refreshed.'):'Error saving';}"
         "async function del(){"
         "  if(!confirm('Permanently delete this property and all its images? This cannot be undone.'))return;"
         "  const r=await fetch('/broker/properties/'+PID,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});"
@@ -1961,7 +2082,8 @@ let _headers=[], _mapping={}, _file=null;
 function tok(){return document.getElementById('tok').value.trim();}
 async function preview(){
   _file=document.getElementById('csv').files[0];if(!_file)return;
-  const fd=new FormData();fd.append('token',tok()||'broker');fd.append('file',_file);
+  if(!tok()){alert('Enter the broker token first');return;}
+  const fd=new FormData();fd.append('token',tok());fd.append('file',_file);
   const r=await fetch('/upload/preview',{method:'POST',body:fd});
   if(!r.ok){alert('Preview failed: '+await r.text());return;}
   const d=await r.json();
@@ -1993,13 +2115,31 @@ async function doImport(){
     const canon=s.id.replace('m_','');if(s.value)cmap[canon]=s.value;});
   document.getElementById('result').innerHTML='<span style="color:#0f766e">Importing... this may take 2-3s per property due to geocoding. Do not close this tab.</span>';
   const fd=new FormData();
-  fd.append('token',tok()||'broker');
+  if(!tok()){document.getElementById('result').innerHTML='<span class="err">Enter the broker token.</span>';return;}
+  fd.append('token',tok());
   fd.append('file',_file);
   fd.append('column_map',JSON.stringify(cmap));
   const r=await fetch('/upload',{method:'POST',body:fd});
   const d=await r.json();
-  document.getElementById('result').innerHTML=
-    '<span class="ok">'+d.message+'</span>';
+  if(!r.ok){document.getElementById('result').innerHTML='<span class="err">'+(d.detail||'Import failed')+'</span>';return;}
+  localStorage.setItem('btok',tok());
+  document.getElementById('result').innerHTML='<span class="ok">'+d.message+'</span>';
+  pollImport(d.job_id);
+}
+async function pollImport(job){
+  const box=document.getElementById('result');
+  while(true){
+    await new Promise(resolve=>setTimeout(resolve,1500));
+    const r=await fetch('/upload/status/'+job+'?token='+encodeURIComponent(tok()));
+    const d=await r.json();
+    if(!r.ok){box.innerHTML='<span class="err">'+(d.detail||'Could not read import status')+'</span>';return;}
+    if(d.status==='complete'){
+      const errors=(d.errors||[]).slice(0,10).map(e=>'<li>'+e+'</li>').join('');
+      box.innerHTML='<span class="ok">Import complete: '+d.success+' added/updated, '+d.failed+' failed.</span>'+(errors?'<ul class="err">'+errors+'</ul>':'');return;
+    }
+    if(d.status==='failed'){box.innerHTML='<span class="err">Import failed: '+d.error+'</span>';return;}
+    box.innerHTML='<span style="color:#0f766e">Importing and recalculating location data...</span>';
+  }
 }
 window.onload=()=>{const s=localStorage.getItem('btok');if(s)document.getElementById('tok').value=s;};
 </script></body></html>"""
@@ -2067,37 +2207,58 @@ window.onload=()=>{const s=localStorage.getItem('btok');if(s){document.getElemen
 
 # ── Telegram webhook (production mode) ───────────────────────────────────────
 
-@app.post("/webhook/telegram")
-async def telegram_webhook(request: Request):
-    try:
-        from telegram import Update
-        from telegram.ext import Application
-        token = os.environ.get("TELEGRAM_BOT_TOKEN")
-        if not token:
-            raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
+_TELEGRAM_APP = None
+_TELEGRAM_APP_LOCK = asyncio.Lock()
 
-        body = await request.json()
-        app_tg = Application.builder().token(token).build()
+
+async def _get_telegram_app(token: str):
+    global _TELEGRAM_APP
+    if _TELEGRAM_APP is not None:
+        return _TELEGRAM_APP
+    async with _TELEGRAM_APP_LOCK:
+        if _TELEGRAM_APP is not None:
+            return _TELEGRAM_APP
+        from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
         from interfaces.telegram_bot import (
             start, help_cmd, reset, profile_cmd, skip,
             handle_message, handle_voice, button_callback, shortlist_cmd,
         )
-        from telegram.ext import CommandHandler, MessageHandler, CallbackQueryHandler, filters
-        app_tg.add_handler(CommandHandler("start",     start))
-        app_tg.add_handler(CommandHandler("help",      help_cmd))
-        app_tg.add_handler(CommandHandler("reset",     reset))
-        app_tg.add_handler(CommandHandler("profile",   profile_cmd))
-        app_tg.add_handler(CommandHandler("skip",      skip))
+        app_tg = Application.builder().token(token).build()
+        app_tg.add_handler(CommandHandler("start", start))
+        app_tg.add_handler(CommandHandler("help", help_cmd))
+        app_tg.add_handler(CommandHandler("reset", reset))
+        app_tg.add_handler(CommandHandler("profile", profile_cmd))
+        app_tg.add_handler(CommandHandler("skip", skip))
         app_tg.add_handler(CommandHandler("shortlist", shortlist_cmd))
         app_tg.add_handler(MessageHandler(filters.VOICE, handle_voice))
         app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         app_tg.add_handler(CallbackQueryHandler(button_callback))
+        await app_tg.initialize()
+        _TELEGRAM_APP = app_tg
+        return app_tg
 
-        async with app_tg:
-            update = Update.de_json(body, app_tg.bot)
-            await app_tg.process_update(update)
+
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
+    try:
+        from telegram import Update
+        token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not token:
+            raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not set")
+        webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
+        if webhook_secret and not hmac.compare_digest(
+            request.headers.get("X-Telegram-Bot-Api-Secret-Token", ""), webhook_secret
+        ):
+            raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
+
+        body = await request.json()
+        app_tg = await _get_telegram_app(token)
+        update = Update.de_json(body, app_tg.bot)
+        await app_tg.process_update(update)
 
         return {"ok": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Telegram webhook error: {e}")
         return {"ok": False}
@@ -2108,7 +2269,9 @@ async def telegram_webhook(request: Request):
 @app.get("/webhook/whatsapp")
 async def whatsapp_verify(request: Request):
     params = dict(request.query_params)
-    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN", "realestate_webhook_2026")
+    verify_token = os.environ.get("WHATSAPP_VERIFY_TOKEN")
+    if not verify_token:
+        raise HTTPException(status_code=503, detail="WHATSAPP_VERIFY_TOKEN is not configured")
     if params.get("hub.verify_token") == verify_token:
         return PlainTextResponse(params.get("hub.challenge", ""))
     raise HTTPException(status_code=403, detail="Verification failed")
@@ -2117,7 +2280,16 @@ async def whatsapp_verify(request: Request):
 @app.post("/webhook/whatsapp")
 async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
     try:
-        body = await request.json()
+        raw_body = await request.body()
+        app_secret = os.environ.get("WHATSAPP_APP_SECRET")
+        if app_secret:
+            supplied = request.headers.get("X-Hub-Signature-256", "")
+            expected = "sha256=" + hmac.new(
+                app_secret.encode("utf-8"), raw_body, hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(supplied, expected):
+                raise HTTPException(status_code=403, detail="Invalid WhatsApp signature")
+        body = json.loads(raw_body or b"{}")
         entry   = body.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
         value   = changes.get("value", {})
@@ -2134,6 +2306,8 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
                     background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text)
 
         return {"ok": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"WhatsApp inbound error: {e}")
         return {"ok": True}

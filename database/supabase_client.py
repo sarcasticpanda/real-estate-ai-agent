@@ -14,9 +14,9 @@ load_dotenv()
 @lru_cache(maxsize=1)
 def get_client() -> Client:
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
     if not url or not key:
-        raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_KEY) must be set in .env")
     return create_client(url, key)
 
 
@@ -90,6 +90,12 @@ def mark_property_booked(property_id: str) -> None:
     client.rpc("mark_property_booked", {"prop_id": property_id}).execute()
 
 
+def mark_property_sold(property_id: str) -> bool:
+    client = get_client()
+    result = client.table("properties").update({"status": "sold"}).eq("id", property_id).execute()
+    return bool(result.data)
+
+
 def list_properties(limit: int = 300, broker_id: str | None = None) -> list[dict]:
     """List properties (newest first) for the broker 'My listings' view."""
     client = get_client()
@@ -109,6 +115,12 @@ def list_properties(limit: int = 300, broker_id: str | None = None) -> list[dict
             "property_type": r.get("property_type"), "status": r.get("status"),
             "images": len(data.get("images") or []),
             "documents": len(data.get("documents") or []),
+            "address": (data.get("metadata") or {}).get("raw_full_address"),
+            "furnishing": (data.get("property_profile") or {}).get("furnishing"),
+            "area_sqft": (data.get("property_profile") or {}).get("builtup_area_sqft"),
+            "description": ((data.get("metadata") or {}).get("description")
+                            or data.get("description")),
+            "amenities": data.get("amenities") or [],
             "broker": ((data.get("source_ids") or {}).get("broker_id")
                        or (data.get("metadata") or {}).get("broker_name")),
         })
@@ -118,7 +130,8 @@ def list_properties(limit: int = 300, broker_id: str | None = None) -> list[dict
 def update_property(property_id: str, price_inr: int | None = None, status: str | None = None,
                     area_name: str | None = None, bhk: int | None = None,
                     property_type: str | None = None, furnishing: str | None = None,
-                    area_sqft: int | None = None, description: str | None = None) -> bool:
+                    area_sqft: int | None = None, description: str | None = None,
+                    amenities: list[str] | None = None) -> bool:
     """Update any combination of listing fields; keeps data sub-fields in sync."""
     client = get_client()
     cur = client.table("properties").select("data,area_name,bhk,property_type").eq("id", property_id).execute().data
@@ -137,17 +150,20 @@ def update_property(property_id: str, price_inr: int | None = None, status: str 
         data.setdefault("location", {})["area_name"] = area_name
     if bhk is not None:
         update["bhk"] = int(bhk)
-        data.setdefault("property_profile", {})["bedrooms"] = int(bhk)
+        data.setdefault("property_profile", {})["bhk"] = int(bhk)
     if property_type is not None:
         update["property_type"] = property_type
+        data.setdefault("property_profile", {})["property_type"] = property_type
     if furnishing is not None:
         data.setdefault("property_profile", {})["furnishing"] = furnishing
     if area_sqft is not None:
         data.setdefault("property_profile", {})["builtup_area_sqft"] = int(area_sqft)
     if description is not None:
-        data["description"] = description
+        data.setdefault("metadata", {})["description"] = description
+    if amenities is not None:
+        data["amenities"] = amenities
 
-    if update or any(v is not None for v in [furnishing, area_sqft, description]):
+    if update or any(v is not None for v in [furnishing, area_sqft, description, amenities]):
         update["data"] = data
         client.table("properties").update(update).eq("id", property_id).execute()
     return True
@@ -164,28 +180,33 @@ def delete_property(property_id: str) -> bool:
     if not cur:
         return False
     data = cur[0]["data"] or {}
-    images = data.get("images") or []
+    documents = data.get("documents") or []
 
-    # Delete owned images from Storage
-    storage_paths = []
-    for url in images:
-        if IMAGES_BUCKET in (url or ""):
-            try:
-                parsed = urllib.parse.urlparse(url)
-                parts = parsed.path.split(f"{IMAGES_BUCKET}/", 1)
-                if len(parts) == 2:
-                    storage_paths.append(parts[1].split("?")[0])
-            except Exception:
-                pass
-    if storage_paths:
-        try:
-            client.storage.from_(IMAGES_BUCKET).remove(storage_paths)
-        except Exception as e:
-            import logging; logging.getLogger(__name__).warning(f"Storage cleanup partial: {e}")
+    def paths_for(items, bucket):
+        paths = []
+        for item in items:
+            url = item.get("url") if isinstance(item, dict) else item
+            if bucket not in (url or ""):
+                continue
+            parsed = urllib.parse.urlparse(url)
+            parts = parsed.path.split(f"{bucket}/", 1)
+            if len(parts) == 2:
+                paths.append(urllib.parse.unquote(parts[1].split("?")[0]))
+        return paths
 
-    # Delete the property row (embeddings table references via property_id text, not FK — leave it)
+    try:
+        image_paths = paths_for(data.get("images") or [], IMAGES_BUCKET)
+        document_paths = paths_for(documents, DOCS_BUCKET)
+        if image_paths:
+            client.storage.from_(IMAGES_BUCKET).remove(image_paths)
+        if document_paths:
+            client.storage.from_(DOCS_BUCKET).remove(document_paths)
+    except Exception as e:
+        raise RuntimeError(f"Storage cleanup failed; property was not deleted: {e}") from e
+
     client.table("properties").delete().eq("id", property_id).execute()
     return True
+
 
 
 # ── Leads ───────────────────────────────────────────────────────────────────
@@ -341,6 +362,15 @@ def get_all_brokers() -> list[dict]:
     return client.table("brokers").select("*").eq("is_active", True).execute().data or []
 
 
+def get_broker_by_phone(phone: str) -> dict | None:
+    """Find an active broker while tolerating +91/91/local phone formatting."""
+    normalized = _normalize_indian_phone(phone)
+    for broker in get_all_brokers():
+        if _normalize_indian_phone(broker.get("phone", "")) == normalized:
+            return broker
+    return None
+
+
 # ── Property Images (Supabase Storage) ───────────────────────────────────────
 
 IMAGES_BUCKET = "property-images"
@@ -430,6 +460,9 @@ def reorder_property_images(property_id: str, ordered_urls: list[str]) -> bool:
     if not result.data:
         return False
     data = result.data[0]["data"]
+    existing = data.get("images") or []
+    if len(ordered_urls) != len(existing) or set(ordered_urls) != set(existing):
+        return False
     data["images"] = ordered_urls
     client.table("properties").update({"data": data}).eq("id", property_id).execute()
     return True
@@ -526,27 +559,54 @@ def save_broker_confirmation(data: dict) -> dict:
           property_id, proposed_dt (ISO), buyer_session_id, status (pending/yes/no)
     """
     client = get_client()
-    data["status"] = "pending"
-    data["created_at"] = "now()"
-    res = client.table("broker_confirmations").upsert(data).execute()
+    payload = dict(data)
+    payload["broker_phone"] = _normalize_indian_phone(payload.get("broker_phone", ""))
+    if payload.get("buyer_phone"):
+        payload["buyer_phone"] = _normalize_indian_phone(payload["buyer_phone"])
+    payload["status"] = "pending"
+    res = client.table("broker_confirmations").insert(payload).execute()
     return res.data[0] if res.data else {}
 
 
 def get_pending_broker_confirmation(broker_phone: str) -> dict | None:
     """Get the most recent pending confirmation for this broker phone."""
     client = get_client()
-    phone = broker_phone.replace("+", "").replace(" ", "")
-    if not phone.startswith("91") and len(phone) == 10:
-        phone = "91" + phone
+    phone = _normalize_indian_phone(broker_phone)
     rows = (client.table("broker_confirmations").select("*")
             .eq("broker_phone", phone).eq("status", "pending")
             .order("created_at", desc=True).limit(1).execute().data)
     return rows[0] if rows else None
 
 
-def update_broker_confirmation(conf_id: str, status: str) -> None:
+def get_latest_broker_confirmation(broker_phone: str, buyer_phone: str | None = None) -> dict | None:
+    """Return the latest confirmed/rescheduled visit associated with a broker."""
     client = get_client()
-    client.table("broker_confirmations").update({"status": status}).eq("id", conf_id).execute()
+    phone = _normalize_indian_phone(broker_phone)
+    query = (client.table("broker_confirmations").select("*")
+             .eq("broker_phone", phone).in_("status", ["yes", "rescheduled"]))
+    if buyer_phone:
+        query = query.eq("buyer_phone", _normalize_indian_phone(buyer_phone))
+    rows = query.order("created_at", desc=True).limit(1).execute().data
+    return rows[0] if rows else None
+
+
+def update_broker_confirmation(conf_id: str, status: str | None = None,
+                               fields: dict | None = None) -> None:
+    client = get_client()
+    update = dict(fields or {})
+    if status is not None:
+        update["status"] = status
+    if update:
+        client.table("broker_confirmations").update(update).eq("id", conf_id).execute()
+
+
+def _normalize_indian_phone(phone: str) -> str:
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if len(digits) == 10:
+        return "91" + digits
+    if len(digits) == 12 and digits.startswith("91"):
+        return digits
+    return digits
 
 
 def save_user_profile(session_id: str, profile: dict) -> None:

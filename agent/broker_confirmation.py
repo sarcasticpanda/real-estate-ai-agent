@@ -32,6 +32,7 @@ def ask_broker_availability(
     proposed_dt: datetime | None,
     property_id: str | None,
     lead_id: str | None,
+    meeting_id: str | None,
     broker_phone: str,
 ) -> bool:
     """
@@ -64,6 +65,7 @@ def ask_broker_availability(
             "buyer_session_id": buyer_session_id,
             "property_id": property_id,
             "lead_id": lead_id,
+            "meeting_id": meeting_id,
             "proposed_dt": proposed_dt.isoformat() if proposed_dt else None,
             "proposed_when": proposed_when,
         })
@@ -82,11 +84,14 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
     """
     from database.supabase_client import (
         get_pending_broker_confirmation, update_broker_confirmation,
-        save_meeting, update_lead,
+        save_meeting, update_meeting, update_lead,
     )
     from notifications.whatsapp_notifier import _send
     from notifications.email_notifier import _send as _email_send
     from agent.property_agent import _build_ics, _gcal_link, _send_visit_confirmation_email
+
+    if _RESCHEDULE_RE.search(reply_text):
+        return handle_broker_reschedule(broker_phone, reply_text)
 
     conf = get_pending_broker_confirmation(broker_phone)
     if not conf:
@@ -100,6 +105,7 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
     proposed_dt_s = conf.get("proposed_dt")
     property_id   = conf.get("property_id")
     lead_id       = conf.get("lead_id")
+    meeting_id    = conf.get("meeting_id")
 
     proposed_dt = None
     if proposed_dt_s:
@@ -110,8 +116,6 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
 
     if _YES_RE.match(reply_text.strip()):
         # Broker is free → book the meeting
-        update_broker_confirmation(conf_id, "yes")
-
         meeting_fields = {
             "property_id": property_id,
             "status": "confirmed",
@@ -123,14 +127,27 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
             meeting_fields["lead_id"] = lead_id
 
         try:
-            save_meeting(meeting_fields)
+            if meeting_id:
+                update_meeting(meeting_id, meeting_fields)
+            else:
+                saved = save_meeting(meeting_fields)
+                meeting_id = (saved or {}).get("id")
+                if meeting_id:
+                    update_broker_confirmation(conf_id, fields={"meeting_id": meeting_id})
             if lead_id:
                 update_lead(lead_id, {"status": "visit"})
+            update_broker_confirmation(conf_id, "yes")
         except Exception as e:
             logger.error(f"save_meeting failed after broker YES: {e}")
+            _send(broker_phone, "I couldn't confirm that visit right now. Please reply YES again shortly.")
+            return True
 
         # WhatsApp the broker confirmation
-        _send(broker_phone, f"Confirmed! I've booked the visit for *{proposed_when}*. The buyer will be informed.")
+        broker_gcal = _gcal_link(proposed_dt, "Property visit", f"Visit with {buyer_name}", "Lucknow")
+        broker_calendar = f"\nAdd it to your calendar: {broker_gcal}" if broker_gcal else ""
+        _send(broker_phone, f"Confirmed! I've booked the visit for *{proposed_when}*. "
+                            f"The buyer will be informed.{broker_calendar}")
+        _send_broker_calendar_invite(broker_phone, buyer_name, proposed_when, proposed_dt, broker_gcal)
 
         # WhatsApp + email the buyer
         buyer_msg = (
@@ -159,6 +176,12 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
     elif _NO_RE.match(reply_text.strip()):
         # Broker is busy → inform buyer, ask them to pick another time
         update_broker_confirmation(conf_id, "no")
+        if meeting_id:
+            update_meeting(meeting_id, {
+                "status": "cancelled",
+                "notes": f"Broker declined requested slot: {proposed_when}",
+            })
+        _prepare_buyer_whatsapp_reschedule(conf)
         _send(broker_phone, "Got it — I'll let the buyer know and ask them to pick another time.")
         if buyer_phone:
             _send(buyer_phone,
@@ -183,13 +206,16 @@ def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = N
     Returns True if we handled it.
     """
     from notifications.whatsapp_notifier import _send
-    from database.supabase_client import update_meeting, get_client
+    from database.supabase_client import (
+        get_latest_broker_confirmation, update_broker_confirmation, update_meeting,
+    )
     from agent.property_agent import _parse_visit_time, _build_ics, _gcal_link, _send_visit_confirmation_email
 
     # Try to find the most recent confirmed meeting for this broker
     if conf is None:
-        from database.supabase_client import get_pending_broker_confirmation
-        conf = get_pending_broker_confirmation(broker_phone)
+        phone_match = re.search(r"(?<!\d)(?:91)?([6-9]\d{9})(?!\d)", text)
+        buyer_phone_hint = phone_match.group(1) if phone_match else None
+        conf = get_latest_broker_confirmation(broker_phone, buyer_phone_hint)
 
     if not conf:
         # Try looking up any recent meeting associated with this broker
@@ -213,11 +239,24 @@ def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = N
     buyer_sid   = conf.get("buyer_session_id","")
     proposed_when = when
 
+    if not meeting_id:
+        _send(broker_phone, "I found the visit details but not its meeting record. Please reschedule it from the dashboard.")
+        return True
+
     try:
-        if meeting_id:
-            update_meeting(meeting_id, {"scheduled_at": dt.isoformat(), "status": "rescheduled"})
+        update_meeting(meeting_id, {
+            "scheduled_at": dt.isoformat(),
+            "status": "confirmed",
+            "notes": f"Broker rescheduled via WhatsApp to {proposed_when}",
+        })
+        update_broker_confirmation(
+            conf["id"], "rescheduled",
+            {"proposed_dt": dt.isoformat(), "proposed_when": proposed_when},
+        )
     except Exception as e:
         logger.error(f"update_meeting on reschedule: {e}")
+        _send(broker_phone, "I couldn't save that new time. Please try again shortly.")
+        return True
 
     # Notify buyer via WhatsApp
     if buyer_phone:
@@ -237,8 +276,65 @@ def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = N
         except Exception as e:
             logger.warning(f"Could not email buyer on reschedule: {e}")
 
+    broker_gcal = _gcal_link(dt, "Property visit", f"Visit with {buyer_name}", "Lucknow")
     _send(broker_phone,
           f"Done! Rescheduled to *{proposed_when}*. "
-          f"{buyer_name} has been notified on WhatsApp.")
+          f"{buyer_name} has been notified on WhatsApp.\n"
+          f"Add it to your calendar: {broker_gcal}")
     logger.info(f"Broker {broker_phone} rescheduled meeting {meeting_id} to {proposed_when}")
     return True
+
+
+def _prepare_buyer_whatsapp_reschedule(conf: dict) -> None:
+    """Make the buyer's next WhatsApp message act as the replacement visit time."""
+    buyer_phone = conf.get("buyer_phone")
+    meeting_id = conf.get("meeting_id")
+    if not buyer_phone or not meeting_id:
+        return
+
+    from database.supabase_client import get_session, save_session, _normalize_indian_phone
+
+    session_id = f"wa_{_normalize_indian_phone(buyer_phone)}"
+    session = get_session(session_id)
+    requirements = session.get("requirements") or {}
+    profile = requirements.get("_profile") or {}
+    profile.update({"name": conf.get("buyer_name"), "phone": buyer_phone})
+    requirements["_profile"] = profile
+    requirements["_pending_meeting"] = {
+        "meeting_id": meeting_id,
+        "lead_id": conf.get("lead_id"),
+        "property_id": conf.get("property_id"),
+        "phone": buyer_phone,
+        "name": conf.get("buyer_name"),
+        "reschedule": True,
+    }
+    requirements["_last_meeting_id"] = meeting_id
+    save_session(session_id, session.get("messages") or [], requirements, "scheduling")
+
+
+def _send_broker_calendar_invite(broker_phone: str, buyer_name: str, when: str,
+                                 dt: datetime | None, gcal: str | None) -> None:
+    """Email the broker an ICS invite when their broker profile has an email."""
+    if not dt:
+        return
+    try:
+        from database.supabase_client import get_broker_by_phone
+        from notifications.email_notifier import send_calendar_invite
+        from agent.property_agent import _build_ics
+
+        broker = get_broker_by_phone(broker_phone) or {}
+        email = broker.get("email")
+        if not email:
+            return
+        broker_name = broker.get("name") or "there"
+        subject = f"Property visit with {buyer_name} - {when}"
+        plain = (f"Hi {broker_name},\n\nYour property visit with {buyer_name} is confirmed "
+                 f"for {when}.\n{('Add to Google Calendar: ' + gcal) if gcal else ''}")
+        calendar_html = f'<p><a href="{gcal}">Add to Google Calendar</a></p>' if gcal else ""
+        html = (f"<p>Hi {broker_name},</p><p>Your property visit with <b>{buyer_name}</b> "
+                f"is confirmed for <b>{when}</b>.</p>{calendar_html}")
+        ics = _build_ics(dt, f"Property visit with {buyer_name}",
+                         "Broker-confirmed property visit", "Lucknow", email)
+        send_calendar_invite(email, subject, html, plain, ics)
+    except Exception as e:
+        logger.warning(f"Could not send broker calendar invite: {e}")
