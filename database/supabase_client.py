@@ -324,6 +324,29 @@ def meeting_slot_taken(dt_iso: str, window_minutes: int = 45, exclude_id: str | 
     return False
 
 
+def list_meetings(limit: int = 100, status: str | None = None) -> list[dict]:
+    """List all meetings (for broker dashboard), newest first."""
+    client = get_client()
+    q = (client.table("meetings")
+         .select("id,lead_id,property_id,scheduled_at,status,notes,created_at")
+         .order("scheduled_at", desc=True).limit(limit))
+    if status:
+        q = q.eq("status", status)
+    meetings = q.execute().data or []
+    # Enrich with lead name/phone
+    for m in meetings:
+        if m.get("lead_id"):
+            try:
+                lead = client.table("leads").select("name,phone,preferred_area").eq("id", m["lead_id"]).limit(1).execute().data
+                if lead:
+                    m["buyer_name"] = lead[0].get("name", "")
+                    m["buyer_phone"] = lead[0].get("phone", "")
+                    m["buyer_area"] = lead[0].get("preferred_area", "")
+            except Exception:
+                pass
+    return meetings
+
+
 def get_upcoming_meetings(hours_ahead: int = 24) -> list[dict]:
     """Get meetings scheduled within the next N hours (for reminders)."""
     client = get_client()

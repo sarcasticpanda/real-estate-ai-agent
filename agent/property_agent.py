@@ -308,6 +308,22 @@ def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict
     profile = conv.requirements.get("_profile") or {}
     step = profile.get("onboarding_step")
 
+    # Property deeplink from browse page: "__init_prop__:PROP_ID:2 BHK in Gomti Nagar at ₹45 L"
+    if user_message.startswith("__init_prop__:"):
+        parts = user_message.split(":", 2)
+        prop_id = parts[1] if len(parts) > 1 else ""
+        prop_desc = parts[2] if len(parts) > 2 else "a property"
+        name = profile.get("name", "")
+        greeting = f"Hi {name}! " if name else "Hi! "
+        # Store property context so follow-up messages about this property work
+        conv.requirements["_deeplink_property_id"] = prop_id
+        reply = (
+            f"{greeting}I see you're interested in **{prop_desc}**. "
+            f"I can tell you more about it, arrange a site visit, or help you compare it with similar options. "
+            f"What would you like to do?"
+        )
+        return {"reply": reply, "properties": []}
+
     # Auto-init: page load / reload — handle here so __init__ never hits intent extractor
     if user_message == "__init__":
         if step == "complete":
@@ -410,7 +426,8 @@ def process_message(session_id: str, user_message: str, platform: str = "web") -
     # ── Guardrail (all platforms/stages): inappropriate or abusive input ─────
     # Runs before onboarding AND routing so it can't be smuggled in as a "name"
     # or slip through the clarify flow. Decline politely, do not store, do not engage.
-    if user_message != "__init__" and _INAPPROPRIATE_RE.search(user_message):
+    if (user_message != "__init__" and not user_message.startswith("__init_prop__:")
+            and _INAPPROPRIATE_RE.search(user_message)):
         user_name = _get_user_name(conv)
         name = f" {user_name}" if user_name else ""
         return {

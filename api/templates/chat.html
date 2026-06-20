@@ -254,7 +254,20 @@ if (SR) {
 function resetMic(){ micBtn.textContent='🎤'; micBtn.classList.remove('listening'); micBtn.disabled=false; }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
-window.addEventListener('load', () => sendSilent('__init__'));
+window.addEventListener('load', () => {
+  const params = new URLSearchParams(location.search);
+  const propId = params.get('prop');
+  const area = params.get('area');
+  const bhk = params.get('bhk');
+  const price = params.get('price');
+  if (propId) {
+    // User came from browse page — init Riya with property context
+    const ctx = `__init_prop__:${propId}:${bhk} BHK in ${area} at ${price}`;
+    sendSilent(ctx);
+  } else {
+    sendSilent('__init__');
+  }
+});
 
 async function sendSilent(msg) {
   const typing = addTyping();

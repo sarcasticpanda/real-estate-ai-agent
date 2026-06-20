@@ -130,7 +130,9 @@ async function load(){
       +'<div class="pcard-loc"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'+(p.area||'Lucknow')+'</div>'
       +(chips?'<div class="pcard-chips">'+chips+'</div>':'')
       +(poi?'<div class="pcard-pois">'+poi+'</div>':'')
-      +'<div class="pcard-actions"><a class="btn-ask" href="/?ask='+encodeURIComponent('Tell me about this property in '+p.area)+'">💬 Ask Riya</a></div>'
+      +'<div class="pcard-actions">'
+      +'<a class="btn-ask" href="/?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'')+'">💬 Ask Riya about this</a>'
+      +'</div>'
       +'</div>';
     g.appendChild(c);
   });

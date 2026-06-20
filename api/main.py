@@ -435,9 +435,106 @@ async def meeting_webhook(payload: MeetingWebhook):
 
 
 @app.get("/meetings/upcoming")
-async def upcoming_meetings(hours_ahead: int = 24):
+async def upcoming_meetings(token: str, hours_ahead: int = 24):
+    _check_broker_token(token)
     meetings = get_upcoming_meetings(hours_ahead)
     return {"count": len(meetings), "meetings": meetings}
+
+
+@app.get("/broker/meetings/api")
+async def broker_meetings_api(token: str, status: str = ""):
+    """All meetings for broker dashboard, with buyer details."""
+    _check_broker_token(token)
+    from database.supabase_client import list_meetings
+    rows = list_meetings(limit=200, status=status or None)
+    return {"meetings": rows, "count": len(rows)}
+
+
+@app.post("/broker/meetings/{meeting_id}/reschedule")
+async def broker_reschedule_meeting(meeting_id: str, req: dict):
+    """Broker reschedules a meeting from the dashboard — updates DB + notifies buyer."""
+    from pydantic import BaseModel as BM
+    token = req.get("token",""); new_time = req.get("new_time","")
+    _check_broker_token(token)
+    if not new_time:
+        raise HTTPException(status_code=400, detail="new_time required")
+    from agent.property_agent import _parse_visit_time, _send_visit_confirmation_email, _gcal_link
+    from database.supabase_client import update_meeting, get_client
+    from notifications.whatsapp_notifier import _send
+    dt, when = _parse_visit_time(new_time)
+    update_fields = {"status": "rescheduled"}
+    if dt:
+        update_fields["scheduled_at"] = dt.isoformat()
+    update_meeting(meeting_id, update_fields)
+    # Try to notify buyer
+    try:
+        cl = get_client()
+        mtg = cl.table("meetings").select("lead_id").eq("id", meeting_id).limit(1).execute().data
+        if mtg and mtg[0].get("lead_id"):
+            lead = cl.table("leads").select("name,phone,email,session_id").eq("id", mtg[0]["lead_id"]).limit(1).execute().data
+            if lead:
+                l = lead[0]
+                if l.get("phone"):
+                    _send(l["phone"], f"Hi {l.get('name','')}, your visit has been rescheduled to *{when}*. See you then!")
+                if l.get("email") and dt:
+                    gcal = _gcal_link(dt, "Property visit", f"Rescheduled to {when}", "Lucknow")
+                    _send_visit_confirmation_email(l["email"], l.get("name",""), when, "Lucknow", gcal, dt)
+    except Exception as e:
+        logger.warning(f"Notification after reschedule failed: {e}")
+    return {"ok": True, "new_time": when}
+
+
+@app.get("/broker/meetings", response_class=HTMLResponse)
+async def broker_meetings_page():
+    content = """
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center">
+  <select id="f-status" class="input" style="width:160px" onchange="load()">
+    <option value="">All meetings</option>
+    <option value="pending">Pending</option>
+    <option value="confirmed">Confirmed</option>
+    <option value="rescheduled">Rescheduled</option>
+    <option value="cancelled">Cancelled</option>
+  </select>
+  <span id="count" style="font-size:13px;color:#64748b;margin-left:8px"></span>
+</div>
+<div id="mtgs"></div>
+"""
+    scripts = """<script>
+async function load(){
+  const t=tok();if(!t){document.getElementById('mtgs').innerHTML='<p style="color:#94a3b8">Enter broker token in sidebar.</p>';return;}
+  const st=document.getElementById('f-status').value;
+  const r=await fetch('/broker/meetings/api?token='+encodeURIComponent(t)+(st?'&status='+st:''));
+  const d=await r.json(); const ms=d.meetings||[];
+  document.getElementById('count').textContent=ms.length+' meetings';
+  if(!ms.length){document.getElementById('mtgs').innerHTML='<div class="empty"><div class="empty-icon">📅</div><p>No meetings yet.</p></div>';return;}
+  const STATUS_COLOR={'confirmed':'badge-won','pending':'badge-new','rescheduled':'badge-visit','cancelled':'badge-lost'};
+  document.getElementById('mtgs').innerHTML='<div class="card"><table class="table"><thead><tr><th>Buyer</th><th>Phone</th><th>Area</th><th>Scheduled</th><th>Status</th><th>Reschedule</th></tr></thead><tbody>'
+    +ms.map(m=>{
+      const dt=m.scheduled_at?new Date(m.scheduled_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
+      const phone=(m.buyer_phone||'').replace(/[^0-9]/g,'');
+      return `<tr>
+        <td><b>${m.buyer_name||'Unknown'}</b></td>
+        <td><a href="https://wa.me/91${phone}" target="_blank" style="color:#059669;font-weight:600">${m.buyer_phone||'—'}</a></td>
+        <td>${m.buyer_area||'—'}</td>
+        <td>${dt}</td>
+        <td><span class="badge ${STATUS_COLOR[m.status]||'badge-wait'}">${m.status}</span></td>
+        <td><button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="reschedule('${m.id}')">Reschedule</button></td>
+      </tr>`;
+    }).join('')+'</tbody></table></div>';
+}
+async function reschedule(id){
+  const t=prompt('Enter new date and time (e.g. "Saturday 5pm" or "25 Jun at 4pm"):');
+  if(!t)return;
+  const r=await fetch('/broker/meetings/'+id+'/reschedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),new_time:t})});
+  const d=await r.json();
+  if(d.ok){toast('Rescheduled to '+d.new_time+' — buyer notified');load();}
+  else toast('Error: '+(d.detail||'unknown'),'false');
+}
+document.getElementById('tok-input').addEventListener('change',load);
+load();
+</script>"""
+    return _broker_page("Meetings & Visits", content, scripts=scripts,
+        hdr_extra='<a href="/broker/pipeline" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">🎯 Pipeline</a>')
 
 
 # ── Property image upload ─────────────────────────────────────────────────────
@@ -537,8 +634,81 @@ def _property_exists(property_id: str) -> bool:
 
 @app.get("/broker/images/{property_id}", response_class=HTMLResponse)
 async def broker_image_manager(property_id: str):
-    """Simple drag-to-reorder, upload, delete image manager for one property."""
-    return _image_manager_html(property_id)
+    pid = property_id
+    content = f"""
+<div style="margin-bottom:14px;font-size:13px;color:#64748b">
+  <a href="/broker/edit/{pid}" style="color:#2563eb;font-weight:600">← Back to Edit</a> &nbsp;·&nbsp;
+  Drag to reorder · First = hero image · Uploading real photos removes Unsplash placeholders
+</div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+  <button class="btn btn-primary" onclick="document.getElementById('fp').click()">+ Upload Photos</button>
+  <button class="btn btn-ghost" onclick="saveOrd()">Save Order</button>
+  <button class="btn btn-ghost" onclick="loadImgs()">Refresh</button>
+</div>
+<input id="fp" type="file" accept="image/*" multiple style="display:none" onchange="upFiles()">
+<div id="drop-zone" style="border:2px dashed #cbd5e1;border-radius:10px;padding:18px;text-align:center;color:#64748b;cursor:pointer;margin-bottom:14px" onclick="document.getElementById('fp').click()">
+  Click or drag photos here (max 10 at once, 5MB each)
+</div>
+<div id="img-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px"></div>
+<div id="img-st" style="margin-top:10px;font-size:13px;color:#059669"></div>
+"""
+    scripts = f"""<script>
+const PID='{pid}';
+async function loadImgs(){{
+  const r=await fetch('/properties/'+PID+'/images');const d=await r.json();
+  render(d.images||[]);
+}}
+function render(urls){{
+  const g=document.getElementById('img-grid');g.innerHTML='';
+  urls.forEach((u,i)=>{{
+    const c=document.createElement('div');
+    c.style.cssText='background:#fff;border:2px solid '+(i===0?'#2563eb':'#e2e8f0')+';border-radius:10px;overflow:hidden;position:relative;cursor:grab';
+    c.draggable=true;c.dataset.url=u;
+    c.innerHTML=(i===0?'<div style="position:absolute;top:6px;left:6px;background:#2563eb;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px">HERO</div>':'')
+      +'<img src="'+u+'" style="width:100%;height:110px;object-fit:cover" onerror="this.style.background=\'#e2e8f0\'">'
+      +'<button onclick="delImg(\''+encodeURIComponent(u)+'\')" style="position:absolute;top:6px;right:6px;background:#ef4444;color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:13px">×</button>';
+    c.addEventListener('dragstart',e=>{{e.dataTransfer.setData('idx',i);c.style.opacity='.4';}});
+    c.addEventListener('dragend',()=>c.style.opacity='1');
+    c.addEventListener('dragover',e=>e.preventDefault());
+    c.addEventListener('drop',e=>{{
+      e.preventDefault();const from=+e.dataTransfer.getData('idx');
+      const items=[...g.children];const mv=items[from];
+      g.removeChild(mv);g.insertBefore(mv,items[i]);
+      // Update hero badge
+      [...g.children].forEach((el,j)=>{{
+        el.style.borderColor=j===0?'#2563eb':'#e2e8f0';
+        const hb=el.querySelector('div[style*="HERO"]');
+        if(j===0&&!hb){{const nb=document.createElement('div');nb.innerHTML='HERO';nb.style.cssText='position:absolute;top:6px;left:6px;background:#2563eb;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px';el.appendChild(nb);}}
+        else if(j!==0&&hb)hb.remove();
+      }});
+    }});
+    g.appendChild(c);
+  }});
+}}
+async function saveOrd(){{
+  const urls=[...document.querySelectorAll('#img-grid>div')].map(c=>c.dataset.url);
+  await fetch('/properties/'+PID+'/images/reorder',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token:tok(),ordered_urls:urls}})}});
+  toast('Order saved');
+}}
+async function delImg(url){{
+  if(!confirm('Delete this image?'))return;
+  await fetch('/properties/'+PID+'/images',{{method:'DELETE',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token:tok(),image_url:decodeURIComponent(url)}})}});
+  loadImgs();
+}}
+async function upFiles(){{
+  const files=document.getElementById('fp').files;if(!files.length)return;
+  document.getElementById('img-st').textContent='Uploading '+files.length+' image(s)…';
+  const fd=new FormData();fd.append('token',tok());
+  for(const f of files)fd.append('files',f);
+  const r=await fetch('/properties/'+PID+'/images/multi',{{method:'POST',body:fd}});
+  const d=await r.json();
+  document.getElementById('img-st').textContent=d.uploaded+' image(s) uploaded!';
+  toast(d.uploaded+' photos uploaded');loadImgs();
+}}
+loadImgs();
+</script>"""
+    return _broker_page("Property Photos", content, active="LIST", scripts=scripts,
+        hdr_extra=f'<a href="/broker/edit/{pid}" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">← Edit Property</a>')
 
 
 # ── Simple web chat interface ─────────────────────────────────────────────────
@@ -1037,7 +1207,7 @@ async def health():
 def _broker_page(title: str, content: str, active: str = "", hdr_extra: str = "", scripts: str = "") -> str:
     """Render a broker page using the shared sidebar shell template."""
     tmpl = (_TEMPLATES_DIR / "broker_base.html").read_text(encoding="utf-8")
-    flags = {"DASH":"","PIPE":"","ANAL":"","LIST":"","ADD":"","UPL":""}
+    flags = {"DASH":"","PIPE":"","ANAL":"","MEET":"","LIST":"","ADD":"","UPL":""}
     if active in flags:
         flags[active] = "active"
     for k, v in flags.items():
@@ -1358,12 +1528,119 @@ async def broker_list_documents(property_id: str):
 
 @app.get("/broker/add", response_class=HTMLResponse)
 async def broker_add_page():
-    return _BROKER_ADD_HTML  # kept as-is; TODO replace with _broker_page shell in next pass
+    # Inline the add-property form inside the sidebar shell
+    content = """
+<div class="page-sm" style="padding:0">
+<div class="card card-body">
+<div class="row"><div><label class="field-label">Property Type *</label>
+<select id="f-type" class="input"><option>Flat</option><option>Independent House</option><option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option><option>Office</option></select></div>
+<div><label class="field-label">BHK *</label><input id="f-bhk" class="input" type="number" min="1" max="10" placeholder="3"></div></div>
+<div class="row"><div><label class="field-label">Price (₹) *</label><input id="f-price" class="input" type="number" placeholder="8500000"></div>
+<div><label class="field-label">Area (sqft)</label><input id="f-sqft" class="input" type="number" placeholder="1200"></div></div>
+<label class="field-label">Area / Locality *</label><input id="f-area" class="input" placeholder="Gomti Nagar">
+<label class="field-label">Full Address</label><input id="f-addr" class="input" placeholder="Plot 42, Sector B, Gomti Nagar">
+<label class="field-label">City</label><input id="f-city" class="input" value="Lucknow">
+<div class="row"><div><label class="field-label">Furnishing</label>
+<select id="f-furn" class="input"><option>Furnished</option><option>Semi-Furnished</option><option>Unfurnished</option></select></div>
+<div><label class="field-label">Transaction</label>
+<select id="f-txn" class="input"><option>New</option><option>Resale</option></select></div></div>
+<label class="field-label">Amenities (comma-separated)</label>
+<input id="f-amen" class="input" placeholder="Lift, Gym, Pool, Parking">
+<label class="field-label">Broker Name</label><input id="f-bname" class="input" placeholder="Your name">
+<label class="field-label">Broker Phone</label><input id="f-bphone" class="input" placeholder="9876543210">
+<label class="field-label">Description</label>
+<textarea id="f-desc" class="input" style="height:80px" placeholder="Describe the property..."></textarea>
+<div style="margin-top:16px;display:flex;gap:10px">
+<button class="btn btn-primary" onclick="addProp()">Add Property</button>
+</div>
+<div id="result" style="margin-top:10px;font-size:13px"></div>
+</div></div>"""
+    scripts = """<script>
+async function addProp(){
+  const t=tok();if(!t){toast('Enter broker token in sidebar','false');return;}
+  const amen=document.getElementById('f-amen').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const body={token:t,
+    property_type:document.getElementById('f-type').value,
+    bhk:+document.getElementById('f-bhk').value||null,
+    price_inr:+document.getElementById('f-price').value||null,
+    area_sqft:+document.getElementById('f-sqft').value||null,
+    area_name:document.getElementById('f-area').value,
+    address:document.getElementById('f-addr').value,
+    city:document.getElementById('f-city').value||'Lucknow',
+    furnishing:document.getElementById('f-furn').value,
+    transaction_type:document.getElementById('f-txn').value,
+    amenities:amen,
+    broker_name:document.getElementById('f-bname').value,
+    broker_phone:document.getElementById('f-bphone').value,
+    description:document.getElementById('f-desc').value,
+  };
+  if(!body.price_inr||!body.area_name){toast('Price and Area are required','false');return;}
+  document.getElementById('result').innerHTML='<span style="color:#0891b2">Adding property + geocoding (may take 5-10s)…</span>';
+  const r=await fetch('/broker/property',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(d.id||d.property_id){
+    const pid=d.id||d.property_id;
+    document.getElementById('result').innerHTML='<span style="color:#059669">✓ Property added! <a href="/broker/edit/'+pid+'">Edit details</a> · <a href="/broker/images/'+pid+'">Upload photos</a></span>';
+    toast('Property added successfully');
+  } else {
+    document.getElementById('result').innerHTML='<span style="color:#dc2626">Error: '+(d.detail||JSON.stringify(d))+'</span>';
+  }
+}
+</script>"""
+    return _broker_page("Add Property", content, active="ADD", scripts=scripts,
+        hdr_extra='<a href="/broker/listings" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">My Listings</a>')
 
 
 @app.get("/broker/upload", response_class=HTMLResponse)
 async def broker_upload_page():
-    return _BROKER_UPLOAD_HTML
+    content = """
+<div class="card card-body" style="max-width:680px">
+<div style="background:#fef9c3;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+💡 Any column names work — Riya auto-detects them. Review the mapping before importing.
+Each property will be geocoded (lat/lng) + enriched with nearby metro/hospital/school distances.
+</div>
+<label class="field-label">CSV File</label>
+<div id="dropzone" style="border:2px dashed #cbd5e1;border-radius:10px;padding:24px;text-align:center;color:#64748b;cursor:pointer;margin-bottom:14px" onclick="document.getElementById('csv').click()">
+  Click to choose CSV file<br><span style="font-size:12px" id="fname"></span>
+</div>
+<input id="csv" type="file" accept=".csv" style="display:none" onchange="preview()">
+<div id="preview-section" style="display:none">
+  <h3 style="font-size:14px;font-weight:700;margin-bottom:8px">Column Mapping <span id="map-note" style="font-size:12px;color:#64748b;font-weight:400"></span></h3>
+  <table class="table" id="map-table" style="margin-bottom:12px"></table>
+  <div id="sample-wrap"></div>
+  <button class="btn btn-primary" style="margin-top:12px" onclick="doImport()">Import All Rows</button>
+  <div id="imp-result" style="margin-top:10px;font-size:13px"></div>
+</div>
+</div>"""
+    scripts = """<script>
+let _file=null,_headers=[],_mapping={};
+async function preview(){
+  _file=document.getElementById('csv').files[0];if(!_file)return;
+  document.getElementById('fname').textContent=_file.name;
+  const fd=new FormData();fd.append('token',tok()||'broker');fd.append('file',_file);
+  const r=await fetch('/upload/preview',{method:'POST',body:fd});
+  if(!r.ok){toast('Preview failed: '+await r.text(),'false');return;}
+  const d=await r.json();_headers=d.headers||[];_mapping=d.column_mapping||{};
+  document.getElementById('preview-section').style.display='block';
+  document.getElementById('map-note').textContent=d.total_rows+' rows · '+_headers.length+' columns';
+  const can=['property_type','bhk','price_inr','area_sqft','address','city','furnishing','amenities','broker_name','broker_phone','description'];
+  const lbl={'property_type':'Type *','bhk':'BHK','price_inr':'Price ₹ *','area_sqft':'Area sqft','address':'Address *','city':'City','furnishing':'Furnishing','amenities':'Amenities','broker_name':'Broker','broker_phone':'Broker Phone','description':'Description'};
+  document.getElementById('map-table').innerHTML='<tr><th>Field</th><th>CSV Column</th></tr>'
+    +can.map(c=>'<tr><td>'+lbl[c]+'</td><td><select class="input map-sel" id="m_'+c+'" style="font-size:12px;padding:4px"><option value="">— skip —</option>'+_headers.map(h=>'<option'+(h===_mapping[c]?' selected':'')+'>'+h+'</option>').join('')+'</select></td></tr>').join('');
+  if(d.sample_rows?.length){
+    document.getElementById('sample-wrap').innerHTML='<p style="font-size:12px;font-weight:600;margin-bottom:6px">Sample rows:</p><div style="overflow-x:auto"><table class="table"><tr>'+_headers.map(h=>'<th>'+h+'</th>').join('')+'</tr>'+d.sample_rows.map(row=>'<tr>'+_headers.map(h=>'<td>'+(row[h]||'')+'</td>').join('')+'</tr>').join('')+'</table></div>';
+  }
+}
+async function doImport(){
+  if(!_file){toast('No file chosen','false');return;}
+  const cmap={};document.querySelectorAll('.map-sel').forEach(s=>{const c=s.id.replace('m_','');if(s.value)cmap[c]=s.value;});
+  document.getElementById('imp-result').innerHTML='<span style="color:#0891b2">Importing… ~2s per row for geocoding. Do not close this tab.</span>';
+  const fd=new FormData();fd.append('token',tok()||'broker');fd.append('file',_file);fd.append('column_map',JSON.stringify(cmap));
+  const r=await fetch('/upload',{method:'POST',body:fd});const d=await r.json();
+  document.getElementById('imp-result').innerHTML='<span style="color:#059669">✓ '+d.message+'</span>';
+}
+</script>"""
+    return _broker_page("Upload Properties CSV", content, active="UPL", scripts=scripts)
 
 
 # ── Broker: my listings (view + edit price + availability) ───────────────────
@@ -1440,7 +1717,74 @@ async def broker_delete_property(property_id: str, req: PropertyDeleteReq):
 
 @app.get("/broker/edit/{property_id}", response_class=HTMLResponse)
 async def broker_edit_page(property_id: str):
-    return _broker_edit_html(property_id)
+    pid = property_id
+    content = f"""
+<div class="page-sm" style="padding:0">
+<div class="card card-body">
+<div class="row"><div><label class="field-label">Price (₹)</label><input id="e-price" class="input" type="number"></div>
+<div><label class="field-label">BHK</label><input id="e-bhk" class="input" type="number" min="1" max="10"></div></div>
+<div class="row"><div><label class="field-label">Area Name</label><input id="e-area" class="input"></div>
+<div><label class="field-label">Area sqft</label><input id="e-sqft" class="input" type="number"></div></div>
+<label class="field-label">Full Address</label><input id="e-addr" class="input" placeholder="Triggers geocode re-enrichment if changed">
+<label class="field-label">City</label><input id="e-city" class="input" value="Lucknow">
+<div class="row"><div><label class="field-label">Type</label>
+<select id="e-type" class="input"><option>Flat</option><option>Independent House</option><option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option></select></div>
+<div><label class="field-label">Furnishing</label>
+<select id="e-furn" class="input"><option>Furnished</option><option>Semi-Furnished</option><option>Unfurnished</option></select></div></div>
+<label class="field-label">Amenities (comma-separated)</label><input id="e-amen" class="input">
+<label class="field-label">Status</label>
+<select id="e-status" class="input"><option value="available">Available</option><option value="booked">Booked</option><option value="sold">Sold</option><option value="unavailable">Unavailable</option></select>
+<label class="field-label">Description</label><textarea id="e-desc" class="input" style="height:80px"></textarea>
+<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+<button class="btn btn-primary" onclick="save()">Save Changes</button>
+<a href="/broker/images/{pid}" class="btn btn-ghost">📷 Manage Photos</a>
+<button class="btn btn-danger" onclick="del()">Delete Property</button>
+</div>
+<div id="e-result" style="margin-top:10px;font-size:13px"></div>
+</div></div>"""
+    scripts = f"""<script>
+const PID='{pid}';
+async function loadProp(){{
+  const t=tok();if(!t)return;
+  const r=await fetch('/broker/properties?token='+encodeURIComponent(t));
+  const d=await r.json();
+  const p=(d.properties||[]).find(x=>x.id===PID);if(!p){{document.getElementById('e-result').textContent='Property not found';return;}}
+  if(p.price_inr)document.getElementById('e-price').value=p.price_inr;
+  if(p.bhk)document.getElementById('e-bhk').value=p.bhk;
+  if(p.area_name)document.getElementById('e-area').value=p.area_name;
+  if(p.property_type)document.getElementById('e-type').value=p.property_type;
+  if(p.status)document.getElementById('e-status').value=p.status;
+}}
+async function save(){{
+  const t=tok();
+  const body={{token:t}};
+  const price=document.getElementById('e-price').value;if(price)body.price_inr=+price;
+  const bhk=document.getElementById('e-bhk').value;if(bhk)body.bhk=+bhk;
+  const area=document.getElementById('e-area').value;if(area)body.area_name=area;
+  const sqft=document.getElementById('e-sqft').value;if(sqft)body.area_sqft=+sqft;
+  const addr=document.getElementById('e-addr').value;if(addr)body.address=addr;
+  const city=document.getElementById('e-city').value;if(city)body.city=city;
+  body.property_type=document.getElementById('e-type').value;
+  body.furnishing=document.getElementById('e-furn').value;
+  body.status=document.getElementById('e-status').value;
+  const amen=document.getElementById('e-amen').value;if(amen)body.amenities=amen;
+  const desc=document.getElementById('e-desc').value;if(desc)body.description=desc;
+  const r=await fetch('/broker/properties/'+PID+'/update',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+  const d=await r.json();
+  document.getElementById('e-result').innerHTML=d.ok?'<span style="color:#059669">✓ Saved!'+(d.enrichment_ran?' (location re-enriched)':'')+'</span>':'<span style="color:#dc2626">Error</span>';
+  toast(d.ok?'Saved successfully':'Save failed',d.ok);
+}}
+async function del(){{
+  if(!confirm('Permanently delete this property and all photos? Cannot be undone.'))return;
+  const r=await fetch('/broker/properties/'+PID,{{method:'DELETE',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{token:tok()}})}});
+  if(r.ok){{toast('Deleted');window.location='/broker/listings';}}
+  else toast('Delete failed','false');
+}}
+document.getElementById('tok-input').addEventListener('change',loadProp);
+loadProp();
+</script>"""
+    return _broker_page(f"Edit Property", content, active="LIST", scripts=scripts,
+        hdr_extra=f'<a href="/broker/images/{pid}" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">📷 Photos</a>')
 
 
 @app.get("/broker/listings", response_class=HTMLResponse)
