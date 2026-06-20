@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Riya — AI Property Consultant · Lucknow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --brand:#2563eb;--brand-dk:#1d4ed8;--brand-lt:#eff6ff;
+  --green:#059669;--green-lt:#ecfdf5;
+  --red:#dc2626;
+  --slate-50:#f8fafc;--slate-100:#f1f5f9;--slate-200:#e2e8f0;
+  --slate-400:#94a3b8;--slate-500:#64748b;--slate-700:#334155;--slate-900:#0f172a;
+  --white:#fff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Header ── */
+#hdr{
+  background:var(--brand);color:#fff;
+  padding:0 16px;height:60px;
+  display:flex;align-items:center;gap:12px;
+  flex-shrink:0;box-shadow:0 2px 8px rgba(37,99,235,.3)
+}
+#hdr-avatar{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
+#hdr-info{flex:1}
+#hdr-name{font-weight:700;font-size:16px;line-height:1.2}
+#hdr-status{font-size:11px;opacity:.8;display:flex;align-items:center;gap:4px}
+#hdr-status::before{content:'';width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0}
+#hdr-actions{display:flex;gap:8px}
+#hdr-actions a,#hdr-actions button{
+  padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;
+  background:rgba(255,255,255,.15);color:#fff;border:none;cursor:pointer;text-decoration:none;
+  transition:background .15s;white-space:nowrap
+}
+#hdr-actions a:hover,#hdr-actions button:hover{background:rgba(255,255,255,.25)}
+#sl-badge{display:none;background:#f43f5e;color:#fff;border-radius:99px;
+  padding:0 6px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:middle}
+
+/* ── Feed ── */
+#feed{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
+#feed::-webkit-scrollbar{width:4px}
+#feed::-webkit-scrollbar-thumb{background:var(--slate-200);border-radius:4px}
+
+/* Bubbles */
+.bubble-row{display:flex;align-items:flex-end;gap:8px;max-width:85%;animation:fadeUp .2s ease}
+.bubble-row.user{flex-direction:row-reverse;align-self:flex-end}
+.bubble-row.riya{align-self:flex-start}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.av{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;flex-shrink:0}
+.av-riya{background:var(--brand);color:#fff}
+.av-user{background:var(--slate-400);color:#fff}
+.bbl{padding:10px 14px;border-radius:18px;font-size:14px;line-height:1.6;word-break:break-word;max-width:100%}
+.bbl-riya{background:#fff;color:var(--slate-900);border-bottom-left-radius:4px;
+  box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.bbl-user{background:var(--brand);color:#fff;border-bottom-right-radius:4px}
+.bbl-riya a{color:var(--brand);font-weight:500}
+.bbl strong{font-weight:700}
+.bbl em{font-style:italic}
+
+/* Typing */
+.typing-row{display:flex;align-items:flex-end;gap:8px;align-self:flex-start}
+.typing-dots{display:flex;gap:5px;padding:12px 16px;background:#fff;border-radius:18px;
+  border-bottom-left-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.typing-dots span{width:7px;height:7px;border-radius:50%;background:var(--slate-400);
+  animation:bounce .8s infinite}
+.typing-dots span:nth-child(2){animation-delay:.15s}
+.typing-dots span:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,60%,100%{transform:none}30%{transform:translateY(-6px)}}
+
+/* ── Property cards ── */
+.cards-wrap{display:flex;flex-direction:column;gap:12px;width:100%;max-width:480px;align-self:flex-start;margin-left:38px}
+.pcard{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.10);border:1px solid var(--slate-200)}
+.pcard-gallery{position:relative;height:190px;background:var(--slate-100);overflow:hidden}
+.pcard-gallery img{width:100%;height:100%;object-fit:cover;cursor:pointer;transition:transform .3s}
+.pcard-gallery img:hover{transform:scale(1.04)}
+.gal-badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);color:#fff;
+  font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;backdrop-filter:blur(4px)}
+.gal-nav{position:absolute;top:50%;transform:translateY(-50%);
+  background:rgba(255,255,255,.9);color:var(--slate-900);border:none;
+  width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:15px;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.2);
+  transition:background .15s}
+.gal-nav:hover{background:#fff}
+.gal-nav.prev{left:8px}.gal-nav.next{right:8px}
+.gal-dots{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);display:flex;gap:4px}
+.gal-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,255,255,.5);cursor:pointer;transition:background .15s}
+.gal-dot.on{background:#fff}
+.pcard-body{padding:14px}
+.pcard-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px}
+.pcard-title{font-size:15px;font-weight:700;color:var(--slate-900);line-height:1.3}
+.pcard-price{font-size:16px;font-weight:800;color:var(--brand);white-space:nowrap}
+.pcard-loc{font-size:12px;color:var(--slate-500);margin-bottom:8px;display:flex;align-items:center;gap:4px}
+.pcard-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.pchip{background:var(--brand-lt);color:var(--brand);font-size:11px;font-weight:600;
+  padding:3px 9px;border-radius:20px}
+.pcard-pois{font-size:12px;color:var(--slate-500);margin-bottom:10px;line-height:1.8}
+.pcard-pois span{display:inline-block;margin-right:12px}
+.pcard-landmark{display:inline-flex;align-items:center;gap:4px;
+  background:#f0fdf4;color:#166534;font-size:12px;font-weight:600;
+  padding:4px 10px;border-radius:8px;margin-bottom:10px;border:1px solid #bbf7d0}
+.pcard-links{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.pcard-links a{font-size:12px;font-weight:600;color:var(--brand);text-decoration:none;
+  background:var(--brand-lt);padding:4px 10px;border-radius:6px;border:1px solid #c7d2fe}
+.pcard-links a:hover{background:#e0e7ff}
+.pcard-actions{display:flex;gap:8px}
+.btn-visit{flex:2;padding:10px;background:var(--brand);color:#fff;border:none;
+  border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s}
+.btn-visit:hover{background:var(--brand-dk)}
+.btn-cb{flex:1;padding:10px;background:var(--green-lt);color:var(--green);
+  border:1.5px solid #6ee7b7;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-cb:hover{background:#d1fae5}
+.btn-save{padding:10px 12px;background:#fff;color:var(--red);border:1.5px solid #fca5a5;
+  border-radius:10px;font-size:14px;cursor:pointer;transition:all .15s}
+.btn-save:hover,.btn-save.saved{background:#fee2e2}
+
+/* ── Input bar ── */
+#bar{
+  background:#fff;border-top:1px solid var(--slate-200);
+  padding:10px 12px;display:flex;gap:8px;align-items:center;flex-shrink:0;
+  box-shadow:0 -2px 8px rgba(0,0,0,.05)
+}
+#inp{
+  flex:1;padding:11px 16px;border-radius:24px;border:1.5px solid var(--slate-200);
+  font-size:14px;font-family:inherit;outline:none;background:var(--slate-50);
+  transition:border-color .15s,box-shadow .15s
+}
+#inp:focus{border-color:var(--brand);background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+#mic-btn{width:42px;height:42px;border-radius:50%;border:1.5px solid var(--slate-200);
+  background:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;transition:all .15s;flex-shrink:0}
+#mic-btn:hover{border-color:var(--brand);background:var(--brand-lt)}
+#mic-btn.listening{background:#fee2e2;border-color:var(--red);animation:pulse 1s infinite}
+#send-btn{width:42px;height:42px;border-radius:50%;border:none;background:var(--brand);
+  color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;transition:background .15s;flex-shrink:0}
+#send-btn:hover{background:var(--brand-dk)}
+#send-btn:disabled{background:var(--slate-200);cursor:default}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ── Lightbox ── */
+#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:1000;
+  align-items:center;justify-content:center;cursor:zoom-out}
+#lb img{max-width:94vw;max-height:92vh;border-radius:8px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+#lb-close{position:absolute;top:16px;right:16px;color:#fff;font-size:28px;cursor:pointer;
+  background:rgba(255,255,255,.15);border:none;border-radius:50%;width:40px;height:40px;
+  display:flex;align-items:center;justify-content:center}
+
+/* ── Shortlist panel ── */
+#sl-panel{display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:500;
+  align-items:flex-end;justify-content:center;backdrop-filter:blur(2px)}
+#sl-box{background:var(--slate-50);border-radius:20px 20px 0 0;max-width:520px;width:100%;
+  max-height:90vh;overflow-y:auto;padding:20px}
+#sl-box h2{font-size:18px;font-weight:700;margin-bottom:14px;color:var(--slate-900)}
+#sl-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+#sl-close{background:var(--slate-100);border:none;border-radius:50%;width:32px;height:32px;
+  font-size:18px;cursor:pointer;color:var(--slate-500);display:flex;align-items:center;justify-content:center}
+#sl-close:hover{background:var(--slate-200)}
+
+@media(max-width:480px){
+  .pcard-gallery{height:160px}
+  .pcard-actions{flex-wrap:wrap}
+  .cards-wrap{margin-left:0;max-width:100%}
+  #hdr-actions a:not(#browse-btn){display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- Lightbox -->
+<div id="lb" onclick="closeLb(event)">
+  <button id="lb-close" onclick="document.getElementById('lb').style.display='none'">✕</button>
+  <img id="lb-img" src="" alt="">
+</div>
+
+<!-- Shortlist panel -->
+<div id="sl-panel" onclick="if(event.target===this)closeShortlist()">
+  <div id="sl-box">
+    <div id="sl-hdr">
+      <h2>❤️ Saved Properties</h2>
+      <button id="sl-close" onclick="closeShortlist()">✕</button>
+    </div>
+    <div id="sl-cards"><p style="color:var(--slate-400);font-size:14px">Loading…</p></div>
+  </div>
+</div>
+
+<!-- Header -->
+<div id="hdr">
+  <div id="hdr-avatar">R</div>
+  <div id="hdr-info">
+    <div id="hdr-name">Riya — AI Property Consultant</div>
+    <div id="hdr-status">Online · Lucknow</div>
+  </div>
+  <div id="hdr-actions">
+    <a id="browse-btn" href="/properties/browse">🏠 Browse</a>
+    <button onclick="openShortlist()">❤️ Saved <span id="sl-badge">0</span></button>
+  </div>
+</div>
+
+<!-- Chat feed -->
+<div id="feed"></div>
+
+<!-- Input bar -->
+<div id="bar">
+  <input id="inp" placeholder="Ask about properties, areas, budget…" autocomplete="off">
+  <button id="mic-btn" title="Voice input">🎤</button>
+  <button id="send-btn" onclick="send()" title="Send">
+    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+  </button>
+</div>
+
+<script>
+// ── Session ──────────────────────────────────────────────────────────────────
+let SID = localStorage.getItem('riya_sid');
+if (!SID) { SID = 'web_' + Math.random().toString(36).slice(2,11); localStorage.setItem('riya_sid', SID); }
+
+const feed = document.getElementById('feed');
+const inp  = document.getElementById('inp');
+const sendBtn = document.getElementById('send-btn');
+const slBadge = document.getElementById('sl-badge');
+const savedIds = new Set(JSON.parse(localStorage.getItem('riya_saved') || '[]'));
+updateBadge();
+
+inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+// ── Voice ────────────────────────────────────────────────────────────────────
+let voiceReply = false;
+function speak(text) {
+  try {
+    if (!window.speechSynthesis) return;
+    let t = text.replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/https?:\/\/\S+/g,'').replace(/[*_#`]/g,'').replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'');
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang='en-IN'; u.rate=1.02; u.pitch=1.05;
+    const vs = window.speechSynthesis.getVoices();
+    const pick = vs.find(v=>/female|Google UK English Female|en-IN/i.test(v.name+v.lang));
+    if (pick) u.voice = pick;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch(e){}
+}
+const micBtn = document.getElementById('mic-btn');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const rec = new SR(); rec.lang='en-IN'; rec.interimResults=false;
+  rec.onresult = e => { const t=e.results[0][0].transcript; inp.value=t; voiceReply=true; resetMic(); setTimeout(()=>{ if(inp.value.trim())send(); },400); };
+  rec.onerror = resetMic; rec.onend = resetMic;
+  micBtn.onclick = () => { micBtn.textContent='🔴'; micBtn.classList.add('listening'); micBtn.disabled=true; rec.start(); };
+} else { micBtn.style.display='none'; }
+function resetMic(){ micBtn.textContent='🎤'; micBtn.classList.remove('listening'); micBtn.disabled=false; }
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('load', () => sendSilent('__init__'));
+
+async function sendSilent(msg) {
+  const typing = addTyping();
+  try {
+    const res = await fetch('/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:SID, message:msg, platform:'web'}) });
+    const data = await res.json();
+    typing.remove();
+    addBubble(data.reply, 'riya');
+    if (data.properties?.length) addCards(data.properties);
+  } catch(e) { typing.remove(); addBubble('Could not connect. Please refresh.', 'riya'); }
+}
+
+async function send() {
+  const txt = inp.value.trim(); if (!txt || sendBtn.disabled) return;
+  inp.value = ''; sendBtn.disabled = true;
+  const userRow = addBubble(txt, 'user');
+  const typing = addTyping();
+  try {
+    const res = await fetch('/chat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:SID, message:txt, platform:'web'}) });
+    const data = await res.json();
+    typing.remove();
+    const riyaRow = addBubble(data.reply, 'riya');
+    if (data.properties?.length) addCards(data.properties);
+    if (voiceReply) { speak(data.reply); voiceReply=false; }
+    requestAnimationFrame(() => riyaRow.scrollIntoView({behavior:'smooth', block:'start'}));
+  } catch(e) { typing.remove(); addBubble('Something went wrong. Try again.', 'riya'); }
+  finally { sendBtn.disabled=false; inp.focus(); }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function addBubble(text, who) {
+  const row = document.createElement('div');
+  row.className = 'bubble-row ' + who;
+  const av = document.createElement('div');
+  av.className = 'av av-' + who;
+  av.textContent = who === 'user' ? 'U' : 'R';
+  const bbl = document.createElement('div');
+  bbl.className = 'bbl bbl-' + who;
+  bbl.innerHTML = md(text);
+  if (who === 'user') { row.appendChild(bbl); row.appendChild(av); }
+  else { row.appendChild(av); row.appendChild(bbl); }
+  feed.appendChild(row);
+  if (who === 'user') feed.scrollTop = feed.scrollHeight;
+  return row;
+}
+
+function addTyping() {
+  const row = document.createElement('div');
+  row.className = 'typing-row';
+  const av = document.createElement('div'); av.className='av av-riya'; av.textContent='R';
+  const dots = document.createElement('div'); dots.className='typing-dots';
+  dots.innerHTML='<span></span><span></span><span></span>';
+  row.appendChild(av); row.appendChild(dots);
+  feed.appendChild(row); feed.scrollTop=feed.scrollHeight;
+  return row;
+}
+
+function md(t) {
+  return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g,'<em>$1</em>')
+    .replace(/_(.+?)_/g,'<em>$1</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g,'$1<a href="$2" target="_blank" rel="noopener">link</a>')
+    .replace(/\n/g,'<br>');
+}
+
+function addCards(props) {
+  const wrap = document.createElement('div'); wrap.className='cards-wrap';
+  props.forEach((p,i) => wrap.appendChild(buildCard(p, i+1)));
+  feed.appendChild(wrap);
+}
+
+function buildCard(p, num) {
+  const card = document.createElement('div'); card.className='pcard';
+  // Gallery
+  const imgs = p.images || [];
+  const gal = document.createElement('div'); gal.className='pcard-gallery';
+  if (imgs.length) {
+    let cur=0;
+    const img = document.createElement('img'); img.src=imgs[0]; img.alt='Photo';
+    img.onerror=()=>{ gal.style.background='#e2e8f0'; img.style.display='none'; };
+    img.onclick=()=>openLb(imgs[cur]);
+    gal.appendChild(img);
+    if (imgs.length>1) {
+      const badge=document.createElement('div'); badge.className='gal-badge';
+      badge.textContent='1 / '+imgs.length; gal.appendChild(badge);
+      const dots=document.createElement('div'); dots.className='gal-dots';
+      imgs.forEach((_,i)=>{ const d=document.createElement('div'); d.className='gal-dot'+(i===0?' on':''); dots.appendChild(d); });
+      const allDots=()=>dots.querySelectorAll('.gal-dot');
+      const prevBtn=document.createElement('button'); prevBtn.className='gal-nav prev'; prevBtn.innerHTML='&#8249;';
+      const nextBtn=document.createElement('button'); nextBtn.className='gal-nav next'; nextBtn.innerHTML='&#8250;';
+      function goTo(i){ cur=i; img.src=imgs[cur]; badge.textContent=(cur+1)+' / '+imgs.length; allDots().forEach((d,j)=>d.classList.toggle('on',j===cur)); }
+      prevBtn.onclick=e=>{ e.stopPropagation(); goTo((cur-1+imgs.length)%imgs.length); };
+      nextBtn.onclick=e=>{ e.stopPropagation(); goTo((cur+1)%imgs.length); };
+      allDots().forEach((d,i)=>d.onclick=()=>goTo(i));
+      gal.appendChild(prevBtn); gal.appendChild(nextBtn); gal.appendChild(dots);
+    }
+  } else { gal.style.display='flex'; gal.style.alignItems='center'; gal.style.justifyContent='center'; gal.innerHTML='<span style="color:#94a3b8;font-size:13px">No photos yet</span>'; }
+  card.appendChild(gal);
+
+  // Body
+  const body=document.createElement('div'); body.className='pcard-body';
+  const head=document.createElement('div'); head.className='pcard-head';
+  const title=document.createElement('div'); title.className='pcard-title';
+  title.textContent=num+'. '+(p.bhk||'')+' BHK '+(p.property_type||'');
+  const price=document.createElement('div'); price.className='pcard-price';
+  price.textContent=(p.price_str||'POA').replace('Rs.','₹');
+  head.appendChild(title); head.appendChild(price); body.appendChild(head);
+
+  const loc=document.createElement('div'); loc.className='pcard-loc';
+  loc.innerHTML='<svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+  const locText=document.createTextNode(' '+(p.area||p.city||'Lucknow')+(p.sqft?' · '+p.sqft+' sqft':'')+(p.furnishing?' · '+p.furnishing:''));
+  loc.appendChild(locText); body.appendChild(loc);
+
+  if (p.landmark_name && (p.landmark_distance_km||p.landmark_distance_km===0)) {
+    const lm=document.createElement('div'); lm.className='pcard-landmark';
+    lm.textContent='🎯 '+p.landmark_distance_km+' km from '+p.landmark_name;
+    body.appendChild(lm);
+  }
+  if (p.top_amenities?.length) {
+    const chips=document.createElement('div'); chips.className='pcard-chips';
+    p.top_amenities.slice(0,6).forEach(a=>{ const c=document.createElement('span'); c.className='pchip'; c.textContent=a; chips.appendChild(c); });
+    body.appendChild(chips);
+  }
+  if (p.connectivity && Object.keys(p.connectivity).length) {
+    const pois=document.createElement('div'); pois.className='pcard-pois';
+    Object.entries(p.connectivity).slice(0,3).forEach(([k,v])=>{ const s=document.createElement('span'); s.textContent='📍 '+k+' '+v; pois.appendChild(s); });
+    body.appendChild(pois);
+  }
+  const links=document.createElement('div'); links.className='pcard-links';
+  if (p.map_url) { const a=document.createElement('a'); a.href=p.map_url; a.target='_blank'; a.textContent='🗺️ Map'; links.appendChild(a); }
+  if (p.documents?.length) p.documents.forEach(d=>{ const a=document.createElement('a'); a.href=d.url; a.target='_blank'; a.textContent='📄 '+(d.label||'Doc'); links.appendChild(a); });
+  if (links.children.length) body.appendChild(links);
+
+  const actions=document.createElement('div'); actions.className='pcard-actions';
+  const vBtn=document.createElement('button'); vBtn.className='btn-visit'; vBtn.textContent='📅 Book Visit';
+  vBtn.onclick=()=>{ inp.value='I want to visit property '+num; send(); };
+  const cBtn=document.createElement('button'); cBtn.className='btn-cb'; cBtn.textContent='📞 Callback';
+  cBtn.onclick=()=>{ inp.value='Please call me back about property '+num; send(); };
+  const isSaved=savedIds.has(p.id);
+  const sBtn=document.createElement('button'); sBtn.className='btn-save'+(isSaved?' saved':'');
+  sBtn.textContent=isSaved?'❤️':'🤍'; sBtn.title=isSaved?'Saved':'Save';
+  sBtn.onclick=()=>toggleSave(p.id, sBtn);
+  actions.appendChild(vBtn); actions.appendChild(cBtn); actions.appendChild(sBtn);
+  body.appendChild(actions); card.appendChild(body);
+  return card;
+}
+
+// ── Shortlist ─────────────────────────────────────────────────────────────────
+async function toggleSave(id, btn) {
+  const had=savedIds.has(id); btn.disabled=true;
+  try {
+    await fetch('/shortlist',{method:had?'DELETE':'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:SID,property_id:id})});
+    had ? savedIds.delete(id) : savedIds.add(id);
+    btn.textContent = savedIds.has(id)?'❤️':'🤍';
+    btn.classList.toggle('saved', savedIds.has(id));
+    localStorage.setItem('riya_saved', JSON.stringify([...savedIds]));
+    updateBadge();
+  } catch(e){} finally { btn.disabled=false; }
+}
+function updateBadge(){ const n=savedIds.size; slBadge.textContent=n; slBadge.style.display=n?'inline':'none'; }
+async function openShortlist() {
+  document.getElementById('sl-panel').style.display='flex';
+  const c=document.getElementById('sl-cards'); c.innerHTML='<p style="color:#94a3b8;font-size:14px">Loading…</p>';
+  try {
+    const res=await fetch('/shortlist/'+SID); const data=await res.json();
+    c.innerHTML='';
+    if (!data.properties?.length) { c.innerHTML='<p style="color:#94a3b8;font-size:14px;text-align:center;padding:30px">No saved properties yet.<br>Tap 🤍 on any card to save.</p>'; return; }
+    data.properties.forEach((p,i)=>c.appendChild(buildCard(p,i+1)));
+  } catch(e){ c.innerHTML='<p style="color:#dc2626;font-size:13px">Could not load.</p>'; }
+}
+function closeShortlist(){ document.getElementById('sl-panel').style.display='none'; }
+
+// ── Lightbox ──────────────────────────────────────────────────────────────────
+function openLb(src){ document.getElementById('lb-img').src=src; document.getElementById('lb').style.display='flex'; }
+function closeLb(e){ if(e.target===document.getElementById('lb'))document.getElementById('lb').style.display='none'; }
+</script>
+</body>
+</html>

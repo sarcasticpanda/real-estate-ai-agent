@@ -543,9 +543,22 @@ async def broker_image_manager(property_id: str):
 
 # ── Simple web chat interface ─────────────────────────────────────────────────
 
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+@app.get("/static/shared.css")
+async def shared_css():
+    from fastapi.responses import Response
+    css = (_TEMPLATES_DIR / "shared.css").read_text(encoding="utf-8")
+    return Response(content=css, media_type="text/css")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def web_chat():
-    """Chat UI with property cards, image galleries, and shortlist."""
+    """Chat UI — new professional design."""
+    tmpl = _TEMPLATES_DIR / "chat.html"
+    if tmpl.exists():
+        return HTMLResponse(tmpl.read_text(encoding="utf-8"))
+    # fallback to old inline HTML if template missing
     return r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1021,8 +1034,26 @@ async def health():
 
 # ── Public property browse page ───────────────────────────────────────────────
 
+def _broker_page(title: str, content: str, active: str = "", hdr_extra: str = "", scripts: str = "") -> str:
+    """Render a broker page using the shared sidebar shell template."""
+    tmpl = (_TEMPLATES_DIR / "broker_base.html").read_text(encoding="utf-8")
+    flags = {"DASH":"","PIPE":"","ANAL":"","LIST":"","ADD":"","UPL":""}
+    if active in flags:
+        flags[active] = "active"
+    for k, v in flags.items():
+        tmpl = tmpl.replace("{{A_" + k + "}}", v)
+    return (tmpl
+        .replace("{{TITLE}}", title)
+        .replace("{{CONTENT}}", content)
+        .replace("{{HDR_EXTRA}}", hdr_extra)
+        .replace("{{SCRIPTS}}", scripts))
+
+
 @app.get("/properties/browse", response_class=HTMLResponse)
 async def properties_browse():
+    tmpl = _TEMPLATES_DIR / "browse.html"
+    if tmpl.exists():
+        return HTMLResponse(tmpl.read_text(encoding="utf-8"))
     return _BROWSE_HTML
 
 
@@ -1099,7 +1130,80 @@ def _check_broker_token(token: str | None):
 
 @app.get("/broker/pipeline", response_class=HTMLResponse)
 async def broker_pipeline_page():
-    return _BROKER_PIPELINE_HTML
+    stages = [
+        ("new","New","#2563eb"),("contacted","Contacted","#0891b2"),
+        ("visit","Visit Scheduled","#7c3aed"),("met","Site Visited","#d97706"),
+        ("negotiating","Negotiating","#ea580c"),("won","Won ✓","#16a34a"),
+        ("waiting","On Hold","#64748b"),("lost","Not Interested","#dc2626"),
+    ]
+    cols = "".join(f'<div class="kcol" data-stage="{s}" style="--col-color:{c}"><div class="kcol-hdr"><span>{lbl}</span><span class="kcnt" id="cnt-{s}">0</span></div><div class="kcards" id="col-{s}"></div></div>' for s,lbl,c in stages)
+    content = f'<div class="kboard">{cols}</div>'
+    scripts = """<script>
+const STAGES=["new","contacted","visit","met","negotiating","won","waiting","lost"];
+let _leads=[];
+async function loadPipe(){
+  const t=tok();if(!t){document.querySelector('.kboard').innerHTML='<p style="color:#94a3b8;padding:20px">Enter broker token in the sidebar.</p>';return;}
+  const r=await fetch('/broker/leads?token='+encodeURIComponent(t)+'&status=all');
+  const d=await r.json(); _leads=d.leads||[];
+  render();
+}
+function render(){
+  STAGES.forEach(s=>{
+    document.getElementById('col-'+s).innerHTML='';
+    document.getElementById('cnt-'+s).textContent=_leads.filter(l=>l.status===s).length;
+  });
+  _leads.forEach(l=>document.getElementById('col-'+(l.status||'new')).appendChild(makeCard(l)));
+}
+function makeCard(l){
+  const c=document.createElement('div');c.className='klcard';c.draggable=true;
+  const phone=(l.phone||'').replace(/[^0-9]/g,'');
+  c.innerHTML=`<div class="kl-name">${l.name||'Unknown'}</div>
+    <div class="kl-phone">${l.phone||''}</div>
+    <div class="kl-meta">${l.preferred_area||''} ${l.budget_max?'· ₹'+(l.budget_max/1e7).toFixed(1)+'Cr':''}</div>
+    <div class="kl-btns">
+      <a href="https://wa.me/91${phone}" target="_blank" class="kl-wa">WhatsApp</a>
+      ${phone?`<a href="tel:${l.phone}" class="kl-call">Call</a>`:''}
+      <button class="kl-note" onclick="addNote('${l.id}','${(l.status||'new')}')">Note</button>
+    </div>`;
+  c.addEventListener('dragstart',e=>{e.dataTransfer.setData('lid',l.id);c.style.opacity='.4';});
+  c.addEventListener('dragend',()=>c.style.opacity='1');
+  return c;
+}
+document.querySelectorAll('.kcards').forEach(col=>{
+  col.addEventListener('dragover',e=>e.preventDefault());
+  col.addEventListener('drop',async e=>{
+    e.preventDefault();
+    const id=e.dataTransfer.getData('lid');
+    const stage=col.closest('.kcol').dataset.stage;
+    await fetch('/broker/leads/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status:stage})});
+    const lead=_leads.find(l=>l.id===id);if(lead)lead.status=stage;
+    render();
+    if(stage==='won'){const p=lead?.interested_property_id;if(p&&confirm('Mark property sold?'))await fetch('/broker/properties/'+p+'/sold',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});}
+  });
+});
+async function addNote(id,status){const txt=prompt('Add note:');if(!txt)return;await fetch('/broker/leads/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status,notes:txt})});loadPipe();}
+loadPipe();
+</script>
+<style>
+.kboard{display:flex;gap:10px;overflow-x:auto;padding-bottom:16px;min-height:70vh}
+.kcol{flex:0 0 210px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;display:flex;flex-direction:column}
+.kcol-hdr{padding:10px 12px;font-size:12px;font-weight:700;color:#334155;
+  border-bottom:3px solid var(--col-color,#2563eb);display:flex;justify-content:space-between}
+.kcnt{background:#e2e8f0;border-radius:99px;padding:1px 8px;font-size:11px}
+.kcards{padding:8px;flex:1;min-height:80px}
+.klcard{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;
+  margin-bottom:8px;cursor:grab;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.klcard:active{cursor:grabbing}
+.kl-name{font-weight:700;font-size:13px;color:#0f172a}
+.kl-phone{font-size:12px;color:#059669;font-weight:600}
+.kl-meta{font-size:11px;color:#64748b;margin:3px 0 7px}
+.kl-btns{display:flex;gap:5px;flex-wrap:wrap}
+.kl-btns a,.kl-btns button{font-size:11px;padding:3px 8px;border-radius:6px;cursor:pointer;
+  border:1px solid #e2e8f0;background:#f8fafc;color:#334155;text-decoration:none}
+.kl-wa{background:#dcfce7!important;border-color:#86efac!important;color:#166534!important}
+.kl-call{background:#eff6ff!important;border-color:#93c5fd!important;color:#1d4ed8!important}
+</style>"""
+    return _broker_page("Lead Pipeline", content, active="PIPE", scripts=scripts)
 
 
 @app.get("/broker/leads")
@@ -1154,7 +1258,50 @@ async def broker_mark_sold(property_id: str, req: PropertySold):
 
 @app.get("/broker", response_class=HTMLResponse)
 async def broker_dashboard():
-    return _BROKER_HTML
+    content = """
+<div class="grid-3" id="stats"></div>
+<div style="margin-top:20px">
+  <h2 style="font-size:15px;font-weight:700;color:#334155;margin-bottom:12px">Recent Leads</h2>
+  <div id="leads-wrap"></div>
+</div>
+"""
+    scripts = """<script>
+async function loadDash(){
+  const t=tok(); if(!t){document.getElementById('stats').innerHTML='<p style="color:#94a3b8;font-size:14px;grid-column:1/-1">Enter your broker token in the sidebar to load data.</p>';return;}
+  const [aRes, lRes] = await Promise.all([
+    fetch('/broker/analytics?token='+encodeURIComponent(t)),
+    fetch('/broker/leads?token='+encodeURIComponent(t)+'&status=all')
+  ]);
+  if(!aRes.ok){document.getElementById('stats').innerHTML='<p style="color:#dc2626;grid-column:1/-1">Invalid token.</p>';return;}
+  const a=await aRes.json(), l=await lRes.json();
+  const leads=l.leads||[];
+  document.getElementById('stats').innerHTML=`
+    <div class="stat"><div class="stat-val">${a.leads_total||0}</div><div class="stat-lbl">Total Leads</div></div>
+    <div class="stat"><div class="stat-val">${a.leads_this_week||0}</div><div class="stat-lbl">This Week</div></div>
+    <div class="stat"><div class="stat-val" style="color:#059669">${a.conversion_rate||0}%</div><div class="stat-lbl">Conversion</div></div>
+    <div class="stat"><div class="stat-val">${a.properties_total||0}</div><div class="stat-lbl">Properties</div></div>
+    <div class="stat"><div class="stat-val" style="color:#059669">${a.properties_available||0}</div><div class="stat-lbl">Available</div></div>
+    <div class="stat"><div class="stat-val" style="color:#dc2626">${a.properties_sold||0}</div><div class="stat-lbl">Sold/Booked</div></div>
+  `;
+  const STATUS_COLOR={'new':'badge-new','contacted':'badge-new','visit':'badge-visit','won':'badge-won','lost':'badge-lost','waiting':'badge-wait','met':'badge-visit','negotiating':'badge-amber'};
+  const rows=leads.slice(0,8).map(l=>`<tr>
+    <td><b>${l.name||'—'}</b></td>
+    <td><a href="tel:${l.phone||''}" style="color:#059669;font-weight:600">${l.phone||'—'}</a></td>
+    <td>${l.preferred_area||'—'}</td>
+    <td>${l.budget_max?fmt(l.budget_max):'—'}</td>
+    <td><span class="badge ${STATUS_COLOR[l.status]||'badge-wait'}">${l.status||'new'}</span></td>
+    <td><a href="https://wa.me/91${(l.phone||'').replace(/[^0-9]/g,'')}" target="_blank" style="color:#059669;font-weight:600;text-decoration:none">WhatsApp</a></td>
+  </tr>`).join('');
+  document.getElementById('leads-wrap').innerHTML=leads.length?
+    '<div class="card"><table class="table"><thead><tr><th>Name</th><th>Phone</th><th>Area</th><th>Budget</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<p style="text-align:center;margin-top:10px"><a href="/broker/pipeline" style="color:#2563eb;font-size:13px;font-weight:600">View all leads in pipeline →</a></p>'
+    :'<p style="color:#94a3b8;font-size:14px">No leads yet.</p>';
+}
+loadDash();
+</script>"""
+    return _broker_page("Dashboard", content, active="DASH",
+        hdr_extra='<a href="/broker/pipeline" class="btn btn-primary" style="font-size:12px;padding:7px 14px">🎯 Open Pipeline</a>',
+        scripts=scripts)
 
 
 # ── Broker: add a single property + upload images & documents ────────────────
@@ -1211,7 +1358,7 @@ async def broker_list_documents(property_id: str):
 
 @app.get("/broker/add", response_class=HTMLResponse)
 async def broker_add_page():
-    return _BROKER_ADD_HTML
+    return _BROKER_ADD_HTML  # kept as-is; TODO replace with _broker_page shell in next pass
 
 
 @app.get("/broker/upload", response_class=HTMLResponse)
@@ -1298,7 +1445,51 @@ async def broker_edit_page(property_id: str):
 
 @app.get("/broker/listings", response_class=HTMLResponse)
 async def broker_listings_page():
-    return _BROKER_LISTINGS_HTML
+    content = """
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+  <select id="f-status" class="input" style="width:140px" onchange="load()">
+    <option value="available">Available</option><option value="booked">Booked</option>
+    <option value="sold">Sold</option><option value="">All</option>
+  </select>
+  <input class="input" id="f-area" placeholder="Filter by area…" style="width:180px" oninput="load()">
+  <a href="/broker/add" class="btn btn-primary" style="margin-left:auto">+ Add Property</a>
+  <a href="/broker/upload" class="btn btn-ghost">Upload CSV</a>
+</div>
+<div id="count" style="font-size:13px;color:#64748b;margin-bottom:10px"></div>
+<div id="props"></div>
+"""
+    scripts = """<script>
+async function load(){
+  const t=tok();if(!t)return;
+  const st=document.getElementById('f-status').value;
+  const ar=document.getElementById('f-area').value.trim();
+  const r=await fetch('/broker/properties?token='+encodeURIComponent(t));
+  const d=await r.json();
+  let ps=(d.properties||[]).filter(p=>(!st||p.status===st)&&(!ar||((p.area_name||'').toLowerCase().includes(ar.toLowerCase()))));
+  document.getElementById('count').textContent=ps.length+' properties';
+  if(!ps.length){document.getElementById('props').innerHTML='<div class="empty"><div class="empty-icon">🏠</div><p>No properties found.</p></div>';return;}
+  document.getElementById('props').innerHTML='<div class="card"><table class="table"><thead><tr><th>Property</th><th>Area</th><th>Price</th><th>Status</th><th>Images</th><th>Actions</th></tr></thead><tbody>'
+    +ps.map(p=>`<tr>
+      <td><b>${p.bhk||''}${p.bhk?' BHK ':''} ${p.property_type||''}</b><br><span style="font-size:11px;color:#94a3b8">${p.id.replace('rag_property_','')}</span></td>
+      <td>${p.area_name||'—'}</td>
+      <td style="font-weight:700;color:#2563eb">${fmt(p.price_inr)}</td>
+      <td><span class="badge ${p.status==='available'?'badge-won':p.status==='sold'?'badge-lost':'badge-wait'}">${p.status}</span></td>
+      <td style="text-align:center">${p.images||0} 📷</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <a href="/broker/edit/${p.id}" class="btn btn-ghost" style="font-size:11px;padding:4px 10px">Edit</a>
+        <a href="/broker/images/${p.id}" class="btn btn-ghost" style="font-size:11px;padding:4px 10px">Photos</a>
+        ${p.status!=='sold'?`<button class="btn btn-danger" style="font-size:11px;padding:4px 10px" onclick="markSold('${p.id}')">Sold</button>`:''}
+      </td>
+    </tr>`).join('')
+    +'</tbody></table></div>';
+}
+async function markSold(id){if(!confirm('Mark as sold?'))return;await fetch('/broker/properties/'+id+'/sold',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});toast('Marked sold');load();}
+document.getElementById('tok-input').addEventListener('change',load);
+load();
+</script>"""
+    return _broker_page("My Listings", content, active="LIST",
+        hdr_extra='<a href="/broker/add" class="btn btn-primary" style="font-size:12px;padding:7px 14px">+ Add Property</a>',
+        scripts=scripts)
 
 
 # ── Visit reminders (call daily from a free cron / n8n / Railway scheduler) ──
@@ -1350,7 +1541,41 @@ async def broker_analytics(token: str):
 
 @app.get("/broker/analytics/visual", response_class=HTMLResponse)
 async def broker_analytics_visual():
-    return _BROKER_ANALYTICS_VISUAL_HTML
+    content = """
+<div class="grid-3" id="kpis" style="margin-bottom:20px"></div>
+<div class="grid-2" id="charts">
+  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Lead Funnel</h3><canvas id="cFunnel" height="200"></canvas></div>
+  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Top Areas</h3><canvas id="cAreas" height="200"></canvas></div>
+  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">BHK Demand</h3><canvas id="cBhk" height="200"></canvas></div>
+  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">New Leads per Week</h3><canvas id="cWeekly" height="200"></canvas></div>
+  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Property Types</h3><canvas id="cTypes" height="200"></canvas></div>
+</div>
+"""
+    scripts = """<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+const C=['#2563eb','#0891b2','#7c3aed','#d97706','#16a34a','#dc2626','#64748b','#ea580c'];
+async function loadAnalytics(){
+  const t=tok();if(!t){document.getElementById('kpis').innerHTML='<p style="color:#94a3b8;grid-column:1/-1">Enter broker token in sidebar.</p>';return;}
+  const r=await fetch('/api/broker/analytics/charts?token='+encodeURIComponent(t));
+  if(!r.ok){document.getElementById('kpis').innerHTML='<p style="color:#dc2626;grid-column:1/-1">Invalid token.</p>';return;}
+  const d=await r.json();
+  const s=d.summary||{};
+  document.getElementById('kpis').innerHTML=[
+    ['Total Leads',s.total_leads||0,'#2563eb'],['Meetings',s.meetings||0,'#0891b2'],
+    ['Won',s.won||0,'#16a34a'],[`${s.conversion_pct||0}%`,'Conversion','#d97706'],
+    ['Properties',s.properties||0,'#334155'],['Available',s.available_props||0,'#059669'],
+  ].map(([v,l,c])=>`<div class="stat"><div class="stat-val" style="color:${c}">${v}</div><div class="stat-lbl">${l}</div></div>`).join('');
+  const mk=(id,type,labels,data,lbl)=>new Chart(document.getElementById(id),{type,data:{labels,datasets:[{label:lbl||'',data,backgroundColor:type==='line'?C[0]+'33':C,borderColor:C[0],fill:type==='line',tension:.3}]},options:{plugins:{legend:{display:type==='doughnut',position:'right'}},scales:type!=='doughnut'?{y:{beginAtZero:true,ticks:{precision:0}}}:{}}});
+  const f=d.funnel||[];mk('cFunnel','bar',f.map(x=>x.stage),f.map(x=>x.count));
+  const a=d.top_areas||[];new Chart(document.getElementById('cAreas'),{type:'bar',data:{labels:a.map(x=>x.area),datasets:[{data:a.map(x=>x.count),backgroundColor:C}]},options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0}}}}});
+  const b=d.bhk||[];mk('cBhk','doughnut',b.map(x=>x.label),b.map(x=>x.count));
+  const w=d.weekly||[];mk('cWeekly','line',w.map(x=>x.week),w.map(x=>x.count),'Leads');
+  const pt=d.prop_types||[];mk('cTypes','doughnut',pt.map(x=>x.type),pt.map(x=>x.count));
+}
+document.getElementById('tok-input').addEventListener('change',loadAnalytics);
+loadAnalytics();
+</script>"""
+    return _broker_page("Analytics", content, active="ANAL", scripts=scripts)
 
 
 @app.get("/api/broker/analytics/charts")

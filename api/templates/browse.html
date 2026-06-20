@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Browse Properties — Riya Lucknow</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="/static/shared.css" rel="stylesheet">
+<style>
+.hero{background:linear-gradient(135deg,#1e40af 0%,#2563eb 60%,#0ea5e9 100%);
+  color:#fff;padding:32px 20px 28px;text-align:center}
+.hero h1{font-size:26px;font-weight:800;margin-bottom:6px}
+.hero p{font-size:14px;opacity:.85}
+.filter-bar{background:#fff;border-bottom:1px solid #e2e8f0;padding:12px 16px;
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;top:0;z-index:50;
+  box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.filter-bar input,.filter-bar select{
+  padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;
+  font-size:13px;font-family:inherit;outline:none;background:#f8fafc;
+  transition:border-color .15s}
+.filter-bar input:focus,.filter-bar select:focus{border-color:#2563eb;background:#fff}
+.filter-bar input{width:160px}
+.filter-bar select{width:130px;cursor:pointer}
+.search-btn{padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:8px;
+  font-weight:700;font-size:13px;cursor:pointer;transition:background .15s;white-space:nowrap}
+.search-btn:hover{background:#1d4ed8}
+#count{color:#64748b;font-size:13px;padding:12px 16px 0;font-weight:500}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px;padding:14px 16px 32px}
+.pcard{background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;
+  box-shadow:0 2px 8px rgba(0,0,0,.07);transition:transform .2s,box-shadow .2s;cursor:pointer}
+.pcard:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.pcard-img{height:180px;background:#f1f5f9;overflow:hidden;position:relative}
+.pcard-img img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
+.pcard:hover .pcard-img img{transform:scale(1.05)}
+.pcard-img-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#94a3b8;font-size:13px}
+.pcard-type-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.55);
+  color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;backdrop-filter:blur(4px)}
+.pcard-body{padding:14px}
+.pcard-price{font-size:18px;font-weight:800;color:#2563eb;margin-bottom:4px}
+.pcard-title{font-size:14px;font-weight:600;color:#0f172a;margin-bottom:3px}
+.pcard-loc{font-size:12px;color:#64748b;margin-bottom:10px;display:flex;align-items:center;gap:4px}
+.pcard-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
+.pchip{background:#eff6ff;color:#2563eb;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px}
+.pchip-green{background:#f0fdf4;color:#059669}
+.pcard-pois{font-size:12px;color:#64748b;margin-bottom:12px;line-height:1.7}
+.pcard-pois span{display:inline-block;margin-right:10px}
+.pcard-actions{display:flex;gap:8px}
+.btn-ask{flex:1;padding:9px;background:#2563eb;color:#fff;border:none;border-radius:8px;
+  font-size:13px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;
+  display:flex;align-items:center;justify-content:center;gap:5px;transition:background .15s}
+.btn-ask:hover{background:#1d4ed8}
+.empty-state{text-align:center;padding:80px 20px;color:#94a3b8}
+.empty-state .ei{font-size:48px;margin-bottom:14px}
+.empty-state h2{font-size:18px;font-weight:700;color:#334155;margin-bottom:8px}
+.empty-state p{font-size:14px}
+.empty-state a{color:#2563eb;font-weight:600;text-decoration:none}
+@media(max-width:640px){
+  .filter-bar{gap:6px}
+  .filter-bar input{width:calc(50% - 3px)}
+  .filter-bar select{width:calc(50% - 3px)}
+  .grid{grid-template-columns:1fr 1fr;gap:10px;padding:10px 10px 24px}
+  .pcard-img{height:140px}
+  .hero h1{font-size:20px}
+}
+@media(max-width:420px){
+  .grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="topnav-brand" href="/">Riya</a>
+  <div class="topnav-links">
+    <a href="/">💬 Chat</a>
+    <a href="/properties/browse" class="active">🏠 <span>Browse</span></a>
+    <a href="/broker">🔑 <span>Broker</span></a>
+  </div>
+</nav>
+
+<div class="hero">
+  <h1>Properties in Lucknow</h1>
+  <p>Find your perfect home — filter by area, BHK, budget and more</p>
+</div>
+
+<div class="filter-bar">
+  <input id="area" placeholder="Area e.g. Gomti Nagar">
+  <select id="bhk"><option value="">Any BHK</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select>
+  <select id="type"><option value="">Any type</option><option>Flat</option><option>Independent House</option><option>Villa</option><option>Builder Floor</option><option>Plot</option><option>Shop</option></select>
+  <input id="min" type="number" placeholder="Min ₹ (lakh)">
+  <input id="max" type="number" placeholder="Max ₹ (lakh)">
+  <button class="search-btn" onclick="load()">Search</button>
+</div>
+<div id="count"></div>
+<div id="grid" class="grid"></div>
+
+<script>
+async function load(){
+  const area=document.getElementById('area').value.trim();
+  const bhk=document.getElementById('bhk').value;
+  const type=document.getElementById('type').value;
+  const minL=parseFloat(document.getElementById('min').value)||0;
+  const maxL=parseFloat(document.getElementById('max').value)||0;
+  let url='/api/properties/browse?limit=60';
+  if(area) url+='&area='+encodeURIComponent(area);
+  if(bhk) url+='&bhk='+bhk;
+  if(type) url+='&prop_type='+encodeURIComponent(type);
+  if(minL) url+='&min_price='+Math.round(minL*1e5);
+  if(maxL) url+='&max_price='+Math.round(maxL*1e5);
+  document.getElementById('count').textContent='Searching…';
+  const r=await fetch(url); const d=await r.json();
+  const ps=d.properties||[];
+  document.getElementById('count').textContent=ps.length+' propert'+(ps.length===1?'y':'ies')+' found';
+  const g=document.getElementById('grid');
+  if(!ps.length){
+    g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><div class="ei">🏠</div><h2>No properties found</h2><p>Try different filters, or <a href="/">chat with Riya</a> for personalised recommendations.</p></div>';
+    return;
+  }
+  g.innerHTML='';
+  ps.forEach(p=>{
+    const c=document.createElement('div'); c.className='pcard';
+    const chips=(p.amenities||[]).map(a=>'<span class="pchip">'+a+'</span>').join('');
+    const poi=p.metro?'<span>🚇 Metro '+p.metro+' km</span>':'';
+    c.innerHTML='<div class="pcard-img">'
+      +(p.hero_img?'<img src="'+p.hero_img+'" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=pcard-img-empty>No photo</div>\'">'
+                  :'<div class="pcard-img-empty">No photo yet</div>')
+      +'<div class="pcard-type-badge">'+(p.prop_type||'Property')+'</div></div>'
+      +'<div class="pcard-body">'
+      +'<div class="pcard-price">₹'+(p.price_str||'POA').replace(/Rs\.\s*/,'')+'</div>'
+      +'<div class="pcard-title">'+(p.bhk||'')+' BHK · '+(p.sqft?p.sqft+' sqft':'')+(p.furnishing?' · '+p.furnishing:'')+'</div>'
+      +'<div class="pcard-loc"><svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'+(p.area||'Lucknow')+'</div>'
+      +(chips?'<div class="pcard-chips">'+chips+'</div>':'')
+      +(poi?'<div class="pcard-pois">'+poi+'</div>':'')
+      +'<div class="pcard-actions"><a class="btn-ask" href="/?ask='+encodeURIComponent('Tell me about this property in '+p.area)+'">💬 Ask Riya</a></div>'
+      +'</div>';
+    g.appendChild(c);
+  });
+}
+// Parse ?ask= param to pre-fill chat
+const askParam=new URLSearchParams(location.search).get('ask');
+if(askParam) { /* handled by chat page */ }
+window.onload=load;
+document.getElementById('area').addEventListener('keydown',e=>{ if(e.key==='Enter') load(); });
+</script>
+</body>
+</html>
