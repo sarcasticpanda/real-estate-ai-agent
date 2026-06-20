@@ -349,6 +349,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(random.choice(done_msgs), parse_mode="Markdown")
         return
 
+    # ── Broker YES/NO/reschedule check (WhatsApp-style, but via Telegram) ───────
+    # If this Telegram user is a broker with a pending confirmation, intercept
+    # their reply before routing it through the buyer-facing agent.
+    try:
+        from agent.broker_confirmation import handle_broker_reply
+        # Use the Telegram chat_id as the "phone" lookup key for broker sessions
+        if handle_broker_reply(session_id, text):
+            # Reply was handled (YES/NO/reschedule) — send confirmation back
+            from database.supabase_client import get_pending_broker_confirmation
+            await update.message.reply_text(
+                "Got it! I've updated the booking and notified the buyer.",
+                parse_mode="Markdown",
+            )
+            return
+    except Exception as _e:
+        logger.debug(f"broker_reply check skipped: {_e}")
+
     # ── Normal conversation flow ──────────────────────────────────────────────
     await _process_search_message(update, context, session_id, text)
 

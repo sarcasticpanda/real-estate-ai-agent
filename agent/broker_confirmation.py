@@ -142,6 +142,19 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
             _send(broker_phone, "I couldn't confirm that visit right now. Please reply YES again shortly.")
             return True
 
+        # Add event to broker's Google Calendar (if configured)
+        gcal_event_link = None
+        try:
+            from notifications.calendar_client import add_event_to_broker_calendar
+            gcal_event_link = add_event_to_broker_calendar(
+                proposed_dt,
+                summary=f"Property visit — {buyer_name}",
+                description=f"Buyer: {buyer_name} | Phone: {buyer_phone} | Property: {property_id or 'TBD'}",
+                duration_minutes=60,
+            )
+        except Exception as _e:
+            logger.debug(f"Google Calendar event skipped: {_e}")
+
         # WhatsApp the broker confirmation
         broker_gcal = _gcal_link(proposed_dt, "Property visit", f"Visit with {buyer_name}", "Lucknow")
         broker_calendar = f"\nAdd it to your calendar: {broker_gcal}" if broker_gcal else ""
@@ -149,13 +162,18 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
                             f"The buyer will be informed.{broker_calendar}")
         _send_broker_calendar_invite(broker_phone, buyer_name, proposed_when, proposed_dt, broker_gcal)
 
-        # WhatsApp + email the buyer
+        # WhatsApp + SMS + email the buyer
         buyer_msg = (
             f"Great news, {buyer_name}! Your visit has been confirmed for *{proposed_when}*. "
             f"Our consultant will be there — see you!"
         )
         if buyer_phone:
             _send(buyer_phone, buyer_msg)
+            try:
+                from notifications.sms_notifier import send_visit_sms_buyer
+                send_visit_sms_buyer(buyer_phone, buyer_name, proposed_when)
+            except Exception as _e:
+                logger.debug(f"SMS on YES skipped: {_e}")
 
         # Email .ics invite to buyer if their session has an email
         if buyer_sid:

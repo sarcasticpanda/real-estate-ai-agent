@@ -1164,6 +1164,18 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         except Exception as e:
             logger.warning(f"availability check failed (continuing): {e}")
 
+        # Also check broker's real Google Calendar (if configured)
+        try:
+            from notifications.calendar_client import is_broker_free
+            free = is_broker_free(dt)
+            if free is False:  # explicitly busy (None = not configured, skip)
+                from datetime import timedelta
+                alt = dt + timedelta(hours=1)
+                return (f"The consultant's calendar shows *{when}* is busy. "
+                        f"How about *{_fmt_visit(alt)}*? I can check that too.")
+        except Exception as _e:
+            logger.debug(f"Google Calendar check skipped: {_e}")
+
     fields = {
         "property_id": pending.get("property_id"),
         "status": "pending",
@@ -1220,8 +1232,20 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     conv.requirements["_last_visit_dt"] = dt.isoformat() if dt else None
     cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if gcal else ""
 
-    # Email confirmation (with a real .ics invite) if we have their address; else offer it.
-    cal_line = "\n\nI'll send the calendar invite as soon as the consultant confirms."
+    # Email + SMS confirmation
+    if profile.get("email"):
+        _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal, dt)
+        cal_line += f"  ·  ✉️ invite sent to {profile['email']}"
+    else:
+        cal_line += "  ·  ✉️ share your email for a calendar invite"
+
+    # SMS confirmation (fires if buyer phone known + FAST2SMS_API_KEY set)
+    try:
+        from notifications.sms_notifier import send_visit_sms_buyer
+        if phone:
+            send_visit_sms_buyer(phone, name, when, area)
+    except Exception as _sms_err:
+        logger.debug(f"SMS skipped: {_sms_err}")
 
     property_part = " for the property you liked" if pending.get("property_id") else ""
     base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
