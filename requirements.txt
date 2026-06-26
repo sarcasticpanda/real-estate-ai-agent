@@ -27,9 +27,10 @@ urllib3
 geopy>=2.4.0       # Nominatim client (address → lat/lng)
 overpy>=0.7.0      # Overpass API client (lat/lng → nearby POIs)
 
-# ── Embeddings (runs locally, free) ──────────────────────────────────────────
-sentence-transformers>=2.7.0
-torch>=2.0.0
+# ── Embeddings (local, free, lightweight) ────────────────────────────────────
+# fastembed runs all-MiniLM-L6-v2 via ONNX (~50MB) — same vectors as
+# sentence-transformers/torch but small enough for free-tier deploys.
+fastembed>=0.3.0
 
 # ── Supabase (vector DB + backend) ───────────────────────────────────────────
 supabase>=2.0.0
