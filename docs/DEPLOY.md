@@ -5,19 +5,12 @@ Deploy config already present: `Procfile`, `railway.toml`, `.python-version` (3.
 
 ---
 
-## ⚠️ READ FIRST — the one architecture decision: embeddings & torch
+## ✅ Embeddings — already solved (no action needed)
 
-The bot embeds every search query locally with `sentence-transformers` + **torch** (~1–2 GB).
-On a free tier this often fails to build or runs out of memory (512 MB).
-
-**Pick one before deploying:**
-
-| Option | What | Trade-off |
-|--------|------|-----------|
-| **A. Hosted embeddings (recommended)** | Swap `embed_text()` to call a free embedding API for the SAME model (`all-MiniLM-L6-v2`, 384-dim) — e.g. HuggingFace Inference API. Drop torch from `requirements.txt`. | Tiny image, fast cold start, fits free tier. Needs a free HF token. Vectors stay identical so existing data still matches. |
-| **B. Heavier host** | Keep local torch, deploy on **Render** (free, 512 MB but slower builds) or **HuggingFace Spaces** (handles torch natively). | No code change, but bigger/slower; may still OOM on the smallest tiers. |
-
-> If unsure, do **A** — it's the clean free-tier path. (Ask me and I'll implement the HF-Inference swap; ~20 lines in `embeddings/embedding_model.py`, no change to stored data.)
+Embeddings run `all-MiniLM-L6-v2` via **fastembed (ONNX, ~50 MB)** instead of torch (~1-2 GB).
+Vectors are identical to the old model (verified cosine = 1.0000), so existing data still matches
+and search is unchanged — and it fits free-tier build/memory. No API token, no network call.
+Nothing to configure here.
 
 ---
 
@@ -50,7 +43,7 @@ WHATSAPP_BUSINESS_ACCOUNT_ID
 TARGET_CITY
 TARGET_AREAS
 ```
-Plus, if you choose embedding Option A: `HF_API_TOKEN`.
+(No embedding token needed — fastembed runs locally.)
 
 ## Step 4 — Deploy & verify
 - Railway builds and gives a URL like `https://real-estate-ai-agent-production.up.railway.app`
@@ -91,5 +84,5 @@ WhatsApp is code-complete and verified locally; it just needs the public URL.
   under load, add the OpenRouter fallback or a paid tier. Each turn = 2–3 LLM calls.
 - **WhatsApp dev mode** — limited to test recipients + 24h token until Meta business verification.
 - **n8n workflows** — if used, their webhook URLs must point at the deployment, not localhost.
-- **Embeddings** — see the Option A/B decision above; don't skip it.
+- **Embeddings** — handled (fastembed/ONNX, local, lightweight). No action.
 - **Secrets** — only in Railway Variables and local `.env`; never commit.
