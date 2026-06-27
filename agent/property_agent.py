@@ -31,7 +31,7 @@ from rag.retriever import retrieve, format_properties_for_llm
 from rag.prompts import (
     SYSTEM_PROMPT, SYSTEM_PROMPT_NAMED,
     PROPERTY_RECOMMENDATION_PROMPT, LEAD_CAPTURE_PROMPT,
-    NO_RESULTS_PROMPT, SOFT_INTEREST_PROMPT, CLARIFY_PROMPT,
+    NO_RESULTS_PROMPT, CLARIFY_PROMPT,
     LEAD_SAVED_TEMPLATE, ASK_VISIT_TIME_TEMPLATE, VISIT_SCHEDULED_TEMPLATE,
     VISIT_SKIP_TEMPLATE,
 )
@@ -927,12 +927,26 @@ def _recommend(
             filter_note = ""
         conv.requirements["_last_filter_note"] = filter_note
         avail_note = f"\n⚠️ availability_note: {filter_note}\n" if filter_note else ""
+
+        # Soft-interest nudge is FOLDED into this same prompt — no second LLM call.
+        # (Previously the nudge was a separate generate pass; cutting it saves ~1 LLM
+        # call per recommend turn, which matters on free-tier rate limits.) Skip when
+        # there's an honesty note so we don't dilute the "we don't have X" message.
+        rec_count = conv.get_recommendation_count()
+        nudge = (not filter_note) and (
+            (lead_level == "soft") or (rec_count >= _AUTO_NUDGE_AFTER and lead_level == "none")
+        )
+        nudge_hint = (
+            "\n\nThe buyer is engaging — for your closing line, gently ask which of these stood "
+            "out to them or whether they'd like to see more options (instead of a generic invite)."
+            if nudge else ""
+        )
         user_prompt = PROPERTY_RECOMMENDATION_PROMPT.format(
             count=len(properties),
             requirements=_requirements_summary(req),
             properties_text=props_text,
             availability_note=avail_note,
-        )
+        ) + nudge_hint
     else:
         cards = []
         user_prompt = NO_RESULTS_PROMPT.format(requirements=_requirements_summary(req))
@@ -940,34 +954,14 @@ def _recommend(
     messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({"role": "user", "content": user_prompt})
-    reply = _llm(messages, max_tokens=300)
+    reply = _llm(messages, max_tokens=320)
 
     # Track the top result as the default "interested" property every time we show
     # results, so a later "book a visit" always has a property to attach to the lead.
-    # A specific pick (soft interest, or "tell me about #3") overrides this below/elsewhere.
+    # A specific pick (soft interest, or "tell me about #3") overrides this elsewhere.
     if properties:
         conv.requirements["_liked_property_id"] = properties[0].get("id", "")
-
-    rec_count = conv.get_recommendation_count()
-    # Don't nudge when there's an availability/honesty note: the nudge is a second LLM
-    # pass that regenerates the reply WITHOUT the note, and would happily parrot a
-    # feature the buyer asked for (e.g. "with a lift") that the listings don't have.
-    should_nudge = (
-        (not filter_note)
-        and ((lead_level == "soft") or (rec_count >= _AUTO_NUDGE_AFTER and lead_level == "none"))
-    )
-    if should_nudge and properties:
-        conv.increment_recommendation_count()
-        nudge_prompt = SOFT_INTEREST_PROMPT.format(
-            context=_requirements_summary(req),
-            message=user_message,
-        )
-        nudge_messages = [{"role": "system", "content": _sys(user_name)}]
-        nudge_messages.append({"role": "assistant", "content": reply})
-        nudge_messages.append({"role": "user", "content": nudge_prompt})
-        reply = _llm(nudge_messages, temperature=0.5, max_tokens=150)
-    else:
-        conv.increment_recommendation_count()
+    conv.increment_recommendation_count()
 
     return reply, cards
 

@@ -9,7 +9,7 @@ Usage:
 Prerequisites:
     1. Supabase tables created (run supabase/migrations/001_initial_schema.sql)
     2. .env has SUPABASE_URL and SUPABASE_KEY
-    3. pip install sentence-transformers supabase
+    3. pip install fastembed supabase
 """
 
 import json
@@ -58,7 +58,7 @@ def run(limit: int | None = None, force: bool = False) -> None:
     # Build semantic texts
     texts = [build_semantic_text(p) for p in properties]
 
-    # Batch embed (fast — all in one shot via sentence-transformers)
+    # Batch embed (fast — all in one shot via fastembed/ONNX)
     logger.info("Running embedding model...")
     embeddings = embed_batch(texts, batch_size=32)
 
