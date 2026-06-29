@@ -2360,12 +2360,13 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
         for msg in messages:
             msg_type = msg.get("type")
             sender   = msg.get("from")
+            msg_id   = msg.get("id")
             session_id = f"wa_{sender}"
 
             if msg_type == "text":
                 text = msg.get("text", {}).get("body", "")
                 if text:
-                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text)
+                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text, msg_id)
 
         return {"ok": True}
     except HTTPException:
@@ -2375,8 +2376,17 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
         return {"ok": True}
 
 
-async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str):
-    from notifications.whatsapp_notifier import _send
+async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str, msg_id: str | None = None):
+    from notifications.whatsapp_notifier import _send, mark_read
+
+    # Acknowledge instantly: blue ticks + "typing…" indicator while we work.
+    # Best-effort — never let this block or break the actual reply.
+    if msg_id:
+        try:
+            mark_read(msg_id, typing=True)
+        except Exception as e:
+            logger.warning(f"WhatsApp mark_read error: {e}")
+
     # Check if this is a broker YES/NO reply to a pending availability confirmation FIRST.
     # If so, handle it and don't run it through the buyer-facing agent.
     try:

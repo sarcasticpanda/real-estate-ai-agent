@@ -71,6 +71,43 @@ def _send(to_phone: str, message: str) -> bool:
         return False
 
 
+def mark_read(message_id: str, typing: bool = True) -> bool:
+    """
+    Mark an inbound message as read (shows blue double-ticks to the sender) and,
+    optionally, show a "typing…" indicator while we generate the reply.
+
+    The typing indicator auto-dismisses when we send our next message, or after
+    ~25s. Safe to call best-effort — failures are logged, never raised.
+    """
+    if not PHONE_NUMBER_ID or not ACCESS_TOKEN or not message_id:
+        return False
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+    }
+    if typing:
+        payload["typing_indicator"] = {"type": "text"}
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(
+            f"{GRAPH_API_URL}/{PHONE_NUMBER_ID}/messages",
+            json=payload,
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"WhatsApp mark_read failed: {e}")
+        return False
+
+
 def notify_broker_whatsapp(lead: dict, requirements: dict, broker_phone: str | None) -> bool:
     """Send new lead alert to broker via WhatsApp."""
     if not broker_phone:
