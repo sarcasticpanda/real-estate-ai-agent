@@ -162,6 +162,26 @@ _ANY_BHK_RE = re.compile(
 )
 
 
+# A pure greeting with no request in it ("hi", "hello", "namaste", "good morning").
+_GREETING_ONLY_RE = re.compile(
+    r"^\s*(hi+|hey+|h[ae]llo+|helo+|hii+|namaste+|namaskar|hola|yo|"
+    r"good\s*(morning|afternoon|evening|day)|start|begin)"
+    r"[\s,!.]*\b(riya|there|ji)?[\s,!.]*$",
+    re.IGNORECASE,
+)
+
+# A bare affirmation ("yes", "ok", "sure", "sounds good") with nothing else — after we've
+# shown properties this means "I'm interested", NOT "search again". Anchored so it never
+# catches a real query like "yes show me 3 BHK in Aliganj".
+_AFFIRM_ONLY_RE = re.compile(
+    r"^\s*(y+e+s+|y+e+a+h*|y+u+p+|yep|ya+|ha+n*|ji+|ok+a*y*|okie+|sure+|"
+    r"sounds?\s*good|great|perfect|nice|cool|good|fine|alright|right|"
+    r"definitely|absolutely|please|pls|👍+|🙂+|👌+)"
+    r"[\s,!.]*$",
+    re.IGNORECASE,
+)
+
+
 _AMENITY_SYNONYM_GROUPS = [
     ["lift", "elevator"],
     ["gym", "gymnasium", "fitness"],
@@ -294,6 +314,28 @@ def _get_user_name(conv: ConversationManager) -> str | None:
     return (conv.requirements.get("_profile") or {}).get("name")
 
 
+def _has_any_requirement(req: dict) -> bool:
+    """True if the buyer has given any real search criterion yet."""
+    return any(req.get(k) for k in
+               ("area", "bhk", "property_type", "max_budget_cr", "min_budget_cr",
+                "named_landmark", "nearby"))
+
+
+# Forward-moving replies for a bare "yes" after results — rotated so it never repeats.
+_AFFIRM_REPLIES = [
+    "Lovely! Which of these caught your eye{nm}? Tell me the one you like and I can arrange a visit whenever you're ready. 🙂",
+    "Great{nm}! Would you like me to set up a site visit for any of these — just tell me which one feels right?",
+    "Perfect{nm}! Want me to share more details on one of these, or shall I arrange a visit so you can see it in person?",
+]
+
+
+def _handle_affirmation(conv: ConversationManager, user_name: str | None) -> str:
+    """Buyer said a bare 'yes/ok' after seeing properties — nudge forward, don't re-search."""
+    nm = f", {user_name}" if user_name else ""
+    idx = conv.get_recommendation_count() % len(_AFFIRM_REPLIES)
+    return _AFFIRM_REPLIES[idx].format(nm=nm)
+
+
 # ── Web onboarding (name + phone, same flow as Telegram) ─────────────────────
 
 def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict | None:
@@ -411,7 +453,8 @@ def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def process_message(session_id: str, user_message: str, platform: str = "web") -> dict:
+def process_message(session_id: str, user_message: str, platform: str = "web",
+                    display_name: str | None = None) -> dict:
     """
     Process one user message.
     Returns {"reply": str, "properties": list[dict]}.
@@ -419,9 +462,22 @@ def process_message(session_id: str, user_message: str, platform: str = "web") -
     Web onboarding messages (name/phone) are intentionally NOT added to chat history
     so they don't confuse the LLM intent extractor (e.g. a phone number in history
     should not trigger lead_intent = "strong").
+
+    display_name: platform-provided name (e.g. WhatsApp profile name) — used to greet
+    the buyer warmly without an onboarding step on messaging channels.
     """
     conv = ConversationManager(session_id, platform)
     conv.load()
+
+    # On messaging platforms we don't run the web name/phone onboarding, but we DO get
+    # the sender's name for free from the platform — store it so Riya can use it.
+    if display_name:
+        profile = conv.requirements.get("_profile") or {}
+        if not profile.get("name"):
+            clean = display_name.strip()
+            if 1 < len(clean) <= 40 and clean.lower() not in _NOT_A_NAME:
+                profile["name"] = clean
+                conv.requirements["_profile"] = profile
 
     # ── Guardrail (all platforms/stages): inappropriate or abusive input ─────
     # Runs before onboarding AND routing so it can't be smuggled in as a "name"
@@ -459,8 +515,32 @@ _NOISE_RE = re.compile(r"^[\W\d\s]{1,4}$")
 
 def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     user_name = _get_user_name(conv)
+    stripped = user_message.strip()
 
     # (Inappropriate/abusive input is guarded at the top of process_message.)
+
+    # ── Pure greeting with no request ("hi", "namaste") at the start of a chat ──
+    # Give a warm, human first impression instead of a cold "what's your budget?".
+    if (_GREETING_ONLY_RE.match(stripped)
+            and conv.stage == "discovery"
+            and not _has_any_requirement(conv.requirements)):
+        nm = f" {user_name}" if user_name else ""
+        return (
+            f"Namaste{nm}! 🙏 I'm Riya, your property consultant here in Lucknow. "
+            f"I'd love to help you find the right home. To get started, could you tell me "
+            f"the area you have in mind, your budget, and how many bedrooms you'd like? "
+            f"Even one of those is a great start. 🏡"
+        ), []
+
+    # ── Bare "yes / ok / sure" right after we showed properties ────────────────
+    # Means "I'm interested" — move the conversation forward; do NOT re-run the search
+    # (that was re-showing the same listings every turn).
+    if (conv.stage == "recommending"
+            and conv.requirements.get("_last_shown_cards")
+            and _AFFIRM_ONLY_RE.match(stripped)
+            and not _ACTION_RE.search(user_message)
+            and not _MORE_OPTIONS_RE.search(user_message)):
+        return _handle_affirmation(conv, user_name), conv.requirements.get("_last_shown_cards", [])
 
     # ── Shortlist request ─────────────────────────────────────────────────────
     if _SHORTLIST_RE.search(user_message):
@@ -536,7 +616,6 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             conv.set_stage("discovery")
 
     # ── Guard: ignore very short/noise messages mid-conversation ─────────────
-    stripped = user_message.strip()
     if _NOISE_RE.match(stripped) and conv.stage == "recommending":
         return "Did any of those properties interest you? Let me know if you'd like details on any of them.", []
 

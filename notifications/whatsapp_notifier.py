@@ -71,6 +71,50 @@ def _send(to_phone: str, message: str) -> bool:
         return False
 
 
+def send_image(to_phone: str, image_url: str, caption: str = "") -> bool:
+    """
+    Send an image message (property photo) by public URL with an optional caption.
+    Best-effort — logs and returns False on failure, never raises.
+    """
+    if not PHONE_NUMBER_ID or not ACCESS_TOKEN or not image_url:
+        return False
+
+    phone = to_phone.replace("+", "").replace(" ", "").replace("-", "")
+    if phone.startswith("0"):
+        phone = phone[1:]
+    if not phone.startswith("91") and len(phone) == 10:
+        phone = "91" + phone
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {"link": image_url},
+    }
+    if caption:
+        payload["image"]["caption"] = caption[:1024]
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.post(
+            f"{GRAPH_API_URL}/{PHONE_NUMBER_ID}/messages",
+            json=payload,
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except requests.HTTPError:
+        logger.warning(f"WhatsApp image send failed ({resp.status_code}): {resp.text[:200]}")
+        return False
+    except Exception as e:
+        logger.warning(f"WhatsApp image send error: {e}")
+        return False
+
+
 def mark_read(message_id: str, typing: bool = True) -> bool:
     """
     Mark an inbound message as read (shows blue double-ticks to the sender) and,

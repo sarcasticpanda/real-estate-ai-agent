@@ -2328,6 +2328,24 @@ async def telegram_webhook(request: Request):
 
 # ── WhatsApp webhook ───────────────────────────────────────────────────────────
 
+# Meta delivers webhooks AT LEAST once and may repeat the same message notification
+# (network retries, multiple subscribed fields). Dedup by message-id so we never reply
+# twice to one message. Bounded FIFO — single uvicorn worker, so in-memory is fine.
+_wa_seen_msg_ids: dict[str, None] = {}
+
+def _wa_already_seen(msg_id: str | None) -> bool:
+    if not msg_id:
+        return False
+    if msg_id in _wa_seen_msg_ids:
+        return True
+    _wa_seen_msg_ids[msg_id] = None
+    if len(_wa_seen_msg_ids) > 1000:
+        # drop oldest ~200 to keep it bounded
+        for old in list(_wa_seen_msg_ids)[:200]:
+            _wa_seen_msg_ids.pop(old, None)
+    return False
+
+
 @app.get("/webhook/whatsapp")
 async def whatsapp_verify(request: Request):
     params = dict(request.query_params)
@@ -2357,16 +2375,27 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
         value   = changes.get("value", {})
         messages = value.get("messages", [])
 
+        # WhatsApp gives us the sender's profile name for free — use it to greet them.
+        contacts = value.get("contacts", []) or []
+        wa_name = None
+        if contacts:
+            wa_name = (contacts[0].get("profile") or {}).get("name")
+
         for msg in messages:
             msg_type = msg.get("type")
             sender   = msg.get("from")
             msg_id   = msg.get("id")
             session_id = f"wa_{sender}"
 
+            # Skip duplicate deliveries of the same message (prevents double replies).
+            if _wa_already_seen(msg_id):
+                logger.info(f"WhatsApp duplicate message {msg_id} ignored")
+                continue
+
             if msg_type == "text":
                 text = msg.get("text", {}).get("body", "")
                 if text:
-                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text, msg_id)
+                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text, msg_id, wa_name)
 
         return {"ok": True}
     except HTTPException:
@@ -2376,8 +2405,34 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
         return {"ok": True}
 
 
-async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str, msg_id: str | None = None):
-    from notifications.whatsapp_notifier import _send, mark_read
+def _wa_caption(card: dict) -> str:
+    """One-line-ish caption for a property image on WhatsApp."""
+    bits = []
+    bhk = card.get("bhk")
+    ptype = (card.get("property_type") or "").title()
+    head = " ".join(x for x in [f"{bhk} BHK" if bhk else "", ptype] if x).strip()
+    price = card.get("price_str") or ""
+    area = card.get("area") or ""
+    line1 = " • ".join(x for x in [head, price, area] if x)
+    if line1:
+        bits.append(f"*{line1}*")
+    meta = []
+    if card.get("sqft"):
+        meta.append(f"{card['sqft']} sqft")
+    if card.get("furnishing"):
+        meta.append(str(card["furnishing"]).title())
+    if card.get("floor"):
+        meta.append(f"Floor {card['floor']}")
+    if meta:
+        bits.append(" • ".join(meta))
+    if card.get("map_url"):
+        bits.append(f"📍 {card['map_url']}")
+    return "\n".join(bits)[:1020]
+
+
+async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str,
+                                   msg_id: str | None = None, wa_name: str | None = None):
+    from notifications.whatsapp_notifier import _send, mark_read, send_image
 
     # Acknowledge instantly: blue ticks + "typing…" indicator while we work.
     # Best-effort — never let this block or break the actual reply.
@@ -2397,7 +2452,17 @@ async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str
         logger.warning(f"broker_reply check failed: {e}")
 
     try:
-        result = process_message(session_id=session_id, user_message=text, platform="whatsapp")
+        result = process_message(session_id=session_id, user_message=text,
+                                 platform="whatsapp", display_name=wa_name)
         _send(sender_phone, result["reply"])
+
+        # Send up to 2 property photos so WhatsApp feels as visual as the web cards.
+        for card in (result.get("properties") or [])[:2]:
+            imgs = card.get("images") or []
+            if imgs:
+                try:
+                    send_image(sender_phone, imgs[0], _wa_caption(card))
+                except Exception as e:
+                    logger.warning(f"WhatsApp image send failed: {e}")
     except Exception as e:
         logger.error(f"WhatsApp reply failed: {e}")
