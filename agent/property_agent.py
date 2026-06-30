@@ -1338,6 +1338,14 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     if dt is None:
         dt, when = _parse_visit_time(user_message)
 
+    # "give me slots / what timings" while scheduling → re-show the numbered menu.
+    if dt is None and _SHOW_SLOTS_RE.search(user_message):
+        slots = _suggest_visit_slots()
+        conv.requirements["_suggested_slots"] = slots
+        menu = "\n".join(f"{i+1}️⃣  {s['label']}" for i, s in enumerate(slots))
+        return (f"Sure, {name}! Here are some options:\n\n{menu}\n\n"
+                f"Reply *1*, *2* or *3*, or tell me any other day & time.")
+
     # Don't book a non-time message as a slot. If no real datetime AND no time signal at all
     # (e.g. "can I reschedule", "actually wait", a question), ask for the time instead.
     if dt is None and not _TIME_SIGNAL_RE.search(user_message):
