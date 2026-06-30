@@ -24,6 +24,54 @@ _RESCHEDULE_RE = re.compile(r"\b(reschedule|change.{0,10}time|different.{0,10}sl
 _BROKER_PHONE  = os.environ.get("BROKER_WHATSAPP_PHONE", os.environ.get("WHATSAPP_BROKER_PHONE", ""))
 
 
+def _property_label(property_id: str | None) -> str:
+    """A human label for the property — '2 BHK Flat in Gomtinagar Ext · Rs.36 lakh'."""
+    if not property_id:
+        return "a property"
+    try:
+        from database.supabase_client import get_client
+        rows = get_client().table("properties").select("data").eq("id", property_id).limit(1).execute().data
+        if not rows:
+            return f"Property {property_id}"
+        d = rows[0].get("data") or {}
+        prof = d.get("property_profile", {}); loc = d.get("location", {}); pr = d.get("pricing", {})
+        bhk = prof.get("bhk"); ptype = (prof.get("property_type") or "").title(); area = loc.get("area_name") or ""
+        price = pr.get("total_price_inr")
+        if price:
+            if price >= 1_00_00_000:
+                cr = price / 1_00_00_000; price_s = f"Rs.{cr:.2g} Cr"
+            else:
+                price_s = f"Rs.{price/100000:.0f} lakh"
+        else:
+            price_s = ""
+        head = " ".join(x for x in [f"{bhk} BHK" if bhk else "", ptype] if x).strip()
+        bits = [b for b in [head, (f"in {area}" if area else ""), price_s] if b]
+        return " · ".join(bits) or f"Property {property_id}"
+    except Exception:
+        return f"Property {property_id}"
+
+
+def _day_schedule_note(proposed_dt: datetime | None) -> str:
+    """Tell the broker how busy that day already is, so they have context."""
+    if not proposed_dt:
+        return ""
+    try:
+        from datetime import timedelta
+        from database.supabase_client import get_client
+        day_start = proposed_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        rows = (get_client().table("meetings").select("id,status,scheduled_at")
+                .gte("scheduled_at", day_start.isoformat()).lt("scheduled_at", day_end.isoformat())
+                .execute().data) or []
+        active = [r for r in rows if (r.get("status") or "").lower() not in ("cancelled",)]
+        n = len(active)
+        if n == 0:
+            return "🗓️ Your day looks clear so far."
+        return f"🗓️ You already have *{n}* visit(s) booked that day."
+    except Exception:
+        return ""
+
+
 def ask_broker_availability(
     buyer_name: str,
     buyer_phone: str,
@@ -36,26 +84,49 @@ def ask_broker_availability(
     broker_phone: str,
 ) -> bool:
     """
-    Send the broker a WhatsApp message asking if they're free for the proposed slot,
-    and store a pending confirmation record so we can match their reply.
-    Returns True if the message was sent.
+    Ask the broker (WhatsApp + email) if they're free for the proposed slot, with the
+    customer's details, the actual property, and that day's existing appointments.
+    Stores a pending confirmation so we can match their reply. Returns True if WA sent.
     """
     from notifications.whatsapp_notifier import _send
-    from database.supabase_client import save_broker_confirmation
+    from database.supabase_client import save_broker_confirmation, get_broker_by_phone
 
-    prop_label = f"Property ID {property_id}" if property_id else "the property"
+    prop_label = _property_label(property_id)
+    day_note = _day_schedule_note(proposed_dt)
     msg = (
-        f"Hi! *{buyer_name}* wants to visit *{prop_label}* "
-        f"on *{proposed_when}*.\n\n"
-        f"Are you free at that time?\n"
-        f"Reply *YES* to confirm or *NO* if busy.\n\n"
-        f"Buyer's phone: {buyer_phone}"
+        f"🏠 *New visit request*\n\n"
+        f"*{buyer_name}* wants to visit:\n_{prop_label}_\n"
+        f"📅 *{proposed_when}*\n"
+        f"📞 Buyer: {buyer_phone}\n"
+        f"{day_note}\n\n"
+        f"Are you free then?\n"
+        f"Reply *YES* to confirm, *NO* if busy, "
+        f"or just send a better time (e.g. _Friday 4pm_)."
     )
 
     sent = _send(broker_phone, msg)
     if not sent:
         logger.warning(f"Could not send broker confirmation WA to {broker_phone}")
         return False
+
+    # Email the broker too (best-effort) so it's on record even if they miss WhatsApp.
+    try:
+        broker = get_broker_by_phone(broker_phone) or {}
+        bemail = broker.get("email")
+        if bemail:
+            from notifications.email_notifier import _send as _email_send
+            subj = f"Visit request: {buyer_name} — {proposed_when}"
+            html = (f"<p><b>New visit request</b></p>"
+                    f"<p><b>{buyer_name}</b> wants to visit <i>{prop_label}</i><br>"
+                    f"📅 <b>{proposed_when}</b><br>📞 {buyer_phone}</p>"
+                    f"<p>{day_note}</p>"
+                    f"<p>Reply on WhatsApp: <b>YES</b> to confirm, <b>NO</b> if busy, or send a better time.</p>")
+            plain = (f"New visit request\n\n{buyer_name} wants to visit {prop_label}\n"
+                     f"{proposed_when}\nBuyer: {buyer_phone}\n{day_note}\n\n"
+                     f"Reply on WhatsApp: YES / NO / a better time.")
+            _email_send(bemail, subj, html, plain)
+    except Exception as e:
+        logger.debug(f"broker availability email skipped: {e}")
 
     try:
         save_broker_confirmation({
