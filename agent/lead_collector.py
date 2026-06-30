@@ -149,7 +149,7 @@ def _send_lead_notifications(lead: dict, requirements: dict, broker: dict | None
     except Exception as e:
         logger.warning(f"Broker WhatsApp failed: {e}")
 
-    # ── Email + WhatsApp to buyer (only if we have their contact) ─────────────
+    # ── Email to buyer (only if we have their email) ──────────────────────────
     buyer_email = requirements.get("email")
     if buyer_email:
         try:
@@ -157,11 +157,10 @@ def _send_lead_notifications(lead: dict, requirements: dict, broker: dict | None
         except Exception as e:
             logger.warning(f"Buyer email failed: {e}")
 
-    if phone:
-        try:
-            notify_buyer_whatsapp(phone, name, broker_name, broker_phone, area, bhk)
-        except Exception as e:
-            logger.warning(f"Buyer WhatsApp failed: {e}")
+    # NOTE: deliberately NO buyer WhatsApp lead-notification here. On WhatsApp the buyer
+    # is already in an active conversation (the scheduling flow messages them properly),
+    # and the old "our broker will call you — Broker: <number>" message both contradicted
+    # the AI-coordinated flow AND leaked the broker's phone number to the customer.
 
 
 def notify_broker_via_n8n(lead: dict, requirements: dict, n8n_webhook_url: str | None = None) -> bool:

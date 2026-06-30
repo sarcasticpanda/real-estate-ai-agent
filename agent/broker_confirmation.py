@@ -161,6 +161,21 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
     from notifications.email_notifier import _send as _email_send
     from agent.property_agent import _build_ics, _gcal_link, _send_visit_confirmation_email
 
+    # ── Broker-identity guard ────────────────────────────────────────────────
+    # This handler runs FIRST for every inbound WhatsApp message. Only let it act when
+    # the sender is actually the broker — otherwise a buyer who types "reschedule" or
+    # "yes" gets pulled into the broker flow (and shown broker-only instructions).
+    def _norm(p): return re.sub(r"\D", "", p or "")[-10:]
+    configured = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE") or ""
+    is_broker = bool(configured) and _norm(broker_phone) == _norm(configured)
+    if not is_broker:
+        try:
+            is_broker = bool(get_pending_broker_confirmation(broker_phone))
+        except Exception:
+            is_broker = False
+    if not is_broker:
+        return False  # sender isn't the broker — let the buyer agent handle it
+
     if _RESCHEDULE_RE.search(reply_text):
         return handle_broker_reschedule(broker_phone, reply_text)
 

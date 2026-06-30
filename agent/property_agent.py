@@ -107,6 +107,13 @@ _COMPARE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Buyer asking to see/choose visit time slots ("give me slots", "what timings", "available times").
+_SHOW_SLOTS_RE = re.compile(
+    r"\b(slots?|time\s*slots?|visit\s*times?|available\s*times?|timings?|"
+    r"what\s*times?|which\s*times?|show.{0,10}times?|pick.{0,10}time)\b",
+    re.IGNORECASE,
+)
+
 # Follow-up QUESTIONS about an already-shown property (not a new search): price
 # negotiation, possession, carpet area, floor, facing, availability, etc. These must be
 # answered from the shown listings — NOT trigger a fresh search.
@@ -351,6 +358,37 @@ def _handle_affirmation(conv: ConversationManager, user_name: str | None) -> str
     return _AFFIRM_REPLIES[idx].format(nm=nm)
 
 
+def _handle_show_slots(conv: ConversationManager, user_name: str | None) -> str:
+    """Buyer asked to see visit time options — show the slot menu (book or change)."""
+    req = conv.requirements
+    profile = req.get("_profile") or {}
+    nm = f", {user_name}" if user_name else ""
+
+    # Already booked → offer slots to switch to (reschedule).
+    if req.get("_last_meeting_id"):
+        req["_pending_meeting"] = {
+            "meeting_id": req["_last_meeting_id"],
+            "lead_id": req.get("_last_lead_id"),
+            "property_id": req.get("_liked_property_id"),
+            "phone": profile.get("phone", ""),
+            "name": profile.get("name") or user_name,
+            "reschedule": True,
+        }
+        conv.set_stage("scheduling")
+        slots = _suggest_visit_slots(); req["_suggested_slots"] = slots
+        menu = "\n".join(f"{i+1}️⃣  {s['label']}" for i, s in enumerate(slots))
+        return (f"Sure{nm}! Here are some times you could switch to:\n\n{menu}\n\n"
+                f"Reply *1*, *2* or *3*, or tell me any other day & time.")
+
+    # Not booked yet, but we know who they are + a property in focus → start booking.
+    if req.get("_liked_property_id") and profile.get("name") and profile.get("phone"):
+        return _begin_scheduling(conv, profile["name"], profile["phone"])
+
+    # No property chosen yet.
+    return (f"Happy to set up a visit{nm}! Which of the properties would you like to see — "
+            f"tell me the one and I'll pull up some times.")
+
+
 # ── Web onboarding (name + phone, same flow as Telegram) ─────────────────────
 
 def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict | None:
@@ -566,6 +604,13 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             and not _ACTION_RE.search(user_message)
             and not _MORE_OPTIONS_RE.search(user_message)):
         return _handle_affirmation(conv, user_name), conv.requirements.get("_last_shown_cards", [])
+
+    # ── "Give me slots / what timings" — show visit times, don't run a search ──
+    if (_SHOW_SLOTS_RE.search(user_message)
+            and (conv.requirements.get("_last_meeting_id") or conv.requirements.get("_liked_property_id"))
+            and not conv.is_lead_capture_stage()
+            and conv.stage != "scheduling"):
+        return _handle_show_slots(conv, user_name), conv.requirements.get("_last_shown_cards", [])
 
     # ── Shortlist request ─────────────────────────────────────────────────────
     if _SHORTLIST_RE.search(user_message):
