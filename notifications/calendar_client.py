@@ -20,17 +20,32 @@ from datetime import datetime, timedelta, timezone
 logger = logging.getLogger(__name__)
 
 _SA_JSON = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+_SA_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "")
 _CAL_ID  = os.environ.get("BROKER_GOOGLE_CALENDAR_ID", "primary")
+
+
+def _load_sa_info():
+    """Service-account creds — from a JSON file (preferred) or an inline JSON env var."""
+    if _SA_FILE and os.path.exists(_SA_FILE):
+        with open(_SA_FILE) as f:
+            return json.load(f)
+    if _SA_JSON:
+        return json.loads(_SA_JSON)
+    return None
 
 
 def _get_service():
     """Build the Google Calendar service using the service account."""
-    if not _SA_JSON:
+    try:
+        info = _load_sa_info()
+    except Exception as e:
+        logger.warning(f"Google Calendar creds unreadable: {e}")
+        return None
+    if not info:
         return None
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
-        info = json.loads(_SA_JSON)
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=["https://www.googleapis.com/auth/calendar"]
         )
