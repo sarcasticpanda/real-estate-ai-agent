@@ -18,8 +18,29 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_YES_RE        = re.compile(r"^\s*(yes|ha|haan|yeah|yep|sure|ok|okay|confirm|confirmed|free|done|y)\s*[.!]*\s*$", re.I)
-_NO_RE         = re.compile(r"^\s*(no|nope|nahi|na|busy|not free|can'?t|cannot|sorry|unavailable|n)\s*[.!]*\s*$", re.I)
+# Natural-language YES / NO — brokers reply in sentences ("yes that works", "no sorry,
+# I'm tied up then"), not just a bare word. Decline is checked FIRST (see _broker_decision).
+_YES_RE = re.compile(
+    r"\b(yes|yeah|yep|yup|ya|haan|sure|ok(ay)?|confirm(ed)?|free|available|fine|"
+    r"works|that works|works for me|sounds good|go ahead|good to go|done|perfect|👍)\b",
+    re.IGNORECASE,
+)
+_NO_RE = re.compile(
+    r"\b(no(?!\s*(problem|worries|issues?))|nope|nah|nahi|sorry|busy|can'?t|cannot|"
+    r"not\s*free|unavailable|tied\s*up|booked|occupied|won'?t\s*work|doesn'?t\s*work|"
+    r"another\s*time|some\s*other\s*time|not\s*(that|then|available))\b",
+    re.IGNORECASE,
+)
+
+
+def _broker_decision(text: str) -> str | None:
+    """Decline beats confirm when both signals appear ('no, but yes to Monday')."""
+    t = (text or "").strip()
+    if _NO_RE.search(t):
+        return "no"
+    if _YES_RE.search(t):
+        return "yes"
+    return None
 _RESCHEDULE_RE = re.compile(r"\b(reschedule|change.{0,10}time|different.{0,10}slot|new.{0,10}time|move.{0,10}to|shift.{0,10}to)\b", re.I)
 _BROKER_PHONE  = os.environ.get("BROKER_WHATSAPP_PHONE", os.environ.get("WHATSAPP_BROKER_PHONE", ""))
 
@@ -263,7 +284,8 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
         except Exception:
             pass
 
-    if _YES_RE.match(reply_text.strip()):
+    _decision = _broker_decision(reply_text)
+    if _decision == "yes":
         # Broker is free → book the meeting
         meeting_fields = {
             "property_id": property_id,
@@ -340,7 +362,7 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
         logger.info(f"Meeting confirmed by broker {broker_phone} for {proposed_when}")
         return True
 
-    elif _NO_RE.match(reply_text.strip()):
+    elif _decision == "no":
         # Broker is busy → inform buyer, ask them to pick another time
         update_broker_confirmation(conf_id, "no")
         if meeting_id:
