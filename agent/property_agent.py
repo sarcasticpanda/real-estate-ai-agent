@@ -69,9 +69,20 @@ _SEARCH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Keywords signalling shortlist intent
+# SHOW the saved list ("show my favourites", "my saved properties", "what have I saved").
+# Requires a show/my context so it doesn't collide with the SAVE verb below.
 _SHORTLIST_RE = re.compile(
-    r"\b(shortlist|saved?|favorites?|liked|my properties|show saved|bookmark)\b",
+    r"\b(show|see|view|list|what'?s?|what\s+are|check|open|display)\b.{0,18}"
+    r"\b(saved|favou?rites?|shortlist|liked|bookmark\w*)\b"
+    r"|\bmy\s+(saved|favou?rites?|shortlist|liked|properties|list)\b"
+    r"|\bsaved\s+(propert\w+|ones?|list)\b",
+    re.IGNORECASE,
+)
+
+# SAVE/favourite a shown property ("save the 2nd one", "add this to favourites", "bookmark it").
+_SAVE_RE = re.compile(
+    r"\b(save|bookmark|favou?rite|shortlist|keep)\b(?!\s+(propert|list|ones?))"
+    r"|add\b.{0,20}\b(favou?rites?|shortlist|saved)\b",
     re.IGNORECASE,
 )
 
@@ -173,9 +184,15 @@ _DIFF_AREA_RE = re.compile(
 
 # "remove budget" / "no budget limit" — clear budget filters
 _CLEAR_BUDGET_RE = re.compile(
-    r"\b(remove.{0,10}budget|no budget|any budget|any price|ignore budget|"
-    r"without budget|price.{0,10}(doesn'?t matter|not important|don'?t care)|"
-    r"budget.{0,10}(doesn'?t matter|not important|remove|ignore)|any amount|no limit)\b",
+    r"\b(remove.{0,10}budget|forget.{0,10}(the\s+)?budget|skip.{0,10}budget|drop.{0,10}budget|"
+    r"leave.{0,10}budget|no budget|any budget|any price|ignore budget|"
+    r"without.{0,6}(a\s+)?budget|don'?t have a budget|no fixed budget|"
+    r"price.{0,10}(doesn'?t matter|not important|don'?t care|no bar)|"
+    r"budget.{0,12}(doesn'?t matter|not important|remove|ignore|flexible|open|not fixed|"
+    r"isn'?t fixed|no bar|no issue|whatever|no limit)|"
+    r"(flexible|open).{0,6}(on\s+|with\s+)?budget|whatever.{0,6}budget|any amount|no limit|"
+    r"not.{0,10}(worried|fussed|bothered).{0,12}(about\s+)?(the\s+)?(budget|price)|"
+    r"just show me anything|show me anything)\b",
     re.IGNORECASE,
 )
 
@@ -634,9 +651,14 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
             and conv.stage != "scheduling"):
         return _handle_show_slots(conv, user_name), conv.requirements.get("_last_shown_cards", [])
 
-    # ── Shortlist request ─────────────────────────────────────────────────────
+    # ── Show saved/favourite properties ──────────────────────────────────────
     if _SHORTLIST_RE.search(user_message):
         return _show_shortlist(conv, user_name)
+
+    # ── Save/favourite a shown property ───────────────────────────────────────
+    if (_SAVE_RE.search(user_message)
+            and not conv.is_lead_capture_stage() and conv.stage != "scheduling"):
+        return _handle_save_favourite(conv, user_message, user_name), conv.requirements.get("_last_shown_cards", [])
 
     # ── EMI / loan question ──────────────────────────────────────────────────
     if _EMI_RE.search(user_message) and not conv.is_lead_capture_stage():
@@ -1777,6 +1799,34 @@ def _compare_properties(
     return _llm(messages, temperature=0.5, max_tokens=220)
 
 
+def _card_desc(card: dict) -> str:
+    bhk = card.get("bhk"); pt = (card.get("property_type") or "").title()
+    head = " ".join(x for x in [f"{bhk} BHK" if bhk else "", pt] if x).strip() or "that property"
+    bits = [head] + ([f"in {card['area']}"] if card.get("area") else []) + \
+           ([f"({card['price_str']})"] if card.get("price_str") else [])
+    return " ".join(bits)
+
+
+def _handle_save_favourite(conv: ConversationManager, user_message: str, user_name: str | None) -> str:
+    """Add a shown property to the buyer's favourites (by reference, else the one in focus)."""
+    cards = conv.requirements.get("_last_shown_cards") or []
+    nm = f", {user_name}" if user_name else ""
+    if not cards:
+        return (f"I'd love to save one for you{nm}! Once I've shown you some options, just say "
+                f"\"save the first one\" (or 2nd, 3rd…) and I'll keep it in your favourites. ❤️")
+    pid = _resolve_referenced_property_id(user_message, conv) \
+        or conv.requirements.get("_liked_property_id") or cards[0].get("id")
+    card = next((c for c in cards if c.get("id") == pid), cards[0])
+    sl = list(conv.requirements.get("_shortlist") or [])
+    if pid in sl:
+        return (f"{_card_desc(card)} is already in your favourites{nm}! ❤️ "
+                f"You have {len(sl)} saved — say *show favourites* to see them.")
+    sl.append(pid)
+    conv.requirements["_shortlist"] = sl
+    return (f"Saved {_card_desc(card)} to your favourites{nm}! ❤️ You now have {len(sl)} saved. "
+            f"Say *show favourites* anytime, or tell me when you'd like to visit one.")
+
+
 def _show_shortlist(conv: ConversationManager, user_name: str | None) -> tuple[str, list]:
     """Return the user's saved/shortlisted properties."""
     from rag.retriever import to_card
@@ -1787,7 +1837,8 @@ def _show_shortlist(conv: ConversationManager, user_name: str | None) -> tuple[s
         name_part = f", {user_name}" if user_name else ""
         return (
             f"You haven't saved any properties yet{name_part}. "
-            "When you see one you like, click 'Save ❤️' to add it to your shortlist!",
+            "When I show you options, just say \"save the first one\" (or 2nd, 3rd…) "
+            "and I'll keep it here in your favourites. ❤️",
             [],
         )
 
