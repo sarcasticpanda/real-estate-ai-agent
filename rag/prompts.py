@@ -214,7 +214,8 @@ ASK_VISIT_TIME_TEMPLATE = (
 
 VISIT_SCHEDULED_TEMPLATE = (
     "Lovely, {name}! *{when}* works{property_part}. I'll have our property consultant "
-    "confirm that slot and reach out to you on {phone} shortly to lock it in. 👍"
+    "confirm that slot and reach out to you on {phone} shortly to lock it in. 👍 "
+    "Need a different time? Just tell me and I'll change it."
 )
 
 VISIT_SKIP_TEMPLATE = (

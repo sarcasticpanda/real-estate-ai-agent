@@ -107,6 +107,21 @@ _COMPARE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Follow-up QUESTIONS about an already-shown property (not a new search): price
+# negotiation, possession, carpet area, floor, facing, availability, etc. These must be
+# answered from the shown listings — NOT trigger a fresh search.
+_PROPERTY_QA_RE = re.compile(
+    r"\b(negotiab\w*|negotiate|discount|best price|final price|price\s*(drop|flexible|fixed|negotiable)|"
+    r"come down|any\s*(lower|less|cheaper price)|bargain|"
+    r"carpet area|super area|built\s*up area|"
+    r"ready to move|ready[-\s]?possession|possession|when can i move|move[-\s]?in|"
+    r"registry|registration|brokerage|maintenance charge\w*|society charge\w*|deposit|"
+    r"how old|age of (the|this|it)|year (built|of construction)|newly built|new construction|"
+    r"which floor|what floor (is|are)|facing direction|which facing|vaastu|vastu|"
+    r"is it (still )?available|still available|already (sold|booked|taken))\b",
+    re.IGNORECASE,
+)
+
 # "show more / other options" — exclude already-shown properties
 _MORE_OPTIONS_RE = re.compile(
     r"\b(more options|more properties|show more|other options|different options|"
@@ -555,7 +570,7 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     # in lead capture. A message like "I love the first one, can I visit?" must fall
     # through to intent extraction → strong intent → lead capture, NOT comparison.
     if (conv.requirements.get("_last_shown_text")
-            and _COMPARE_RE.search(user_message)
+            and (_COMPARE_RE.search(user_message) or _PROPERTY_QA_RE.search(user_message))
             and not _ACTION_RE.search(user_message)
             and not conv.is_lead_capture_stage()):
         return _compare_properties(conv, user_message, user_name), conv.requirements.get("_last_shown_cards", [])
@@ -604,6 +619,10 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
         }
         conv.set_stage("scheduling")
         nm = (profile.get("name") or user_name or "")
+        # If they already gave the new time in the same message ("change it to Monday 6 pm"),
+        # parse it now instead of asking again.
+        if _parse_visit_time(user_message):
+            return _handle_scheduling(conv, user_message, user_name), []
         return (f"Sure{', ' + nm if nm else ''} — what new day and time would suit you better? "
                 "(e.g. \"Sunday afternoon\" or \"Monday 6 pm\")"), []
 
@@ -1142,7 +1161,17 @@ def _begin_scheduling(conv: ConversationManager, name: str, phone: str) -> str:
         "property_id": liked_id, "phone": phone, "name": name,
     }
     conv.set_stage("scheduling")
-    return ASK_VISIT_TIME_TEMPLATE.format(name=name)
+
+    # Offer concrete slots the buyer can simply pick (or change to any other time).
+    slots = _suggest_visit_slots()
+    conv.requirements["_suggested_slots"] = slots
+    menu = "\n".join(f"{i+1}️⃣  {s['label']}" for i, s in enumerate(slots))
+    return (
+        f"Thank you, {name}! 🎉 I've shared your details with our consultant. "
+        f"When would you like to visit? A few easy options:\n\n{menu}\n\n"
+        f"Just reply *1*, *2* or *3* — or tell me any other day & time that suits you "
+        f"(like \"tomorrow evening\"). You can change it anytime. 🗓️"
+    )
 
 
 _SKIP_VISIT_RE = re.compile(r"^\s*(skip|later|not now|no thanks?|nah|call me|you call|whenever|"
@@ -1217,12 +1246,31 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         conv.set_stage("post_lead")
         conv.requirements["_post_lead_turns"] = 3
         conv.requirements.pop("_pending_meeting", None)
+        conv.requirements.pop("_suggested_slots", None)
 
     if _SKIP_VISIT_RE.match(user_message.strip()):
         _finish()
         return VISIT_SKIP_TEMPLATE.format(name=name, phone=phone)
 
-    dt, when = _parse_visit_time(user_message)
+    # Buyer picked one of the suggested slots by number ("2") or ordinal ("second").
+    dt, when = None, None
+    slots = conv.requirements.get("_suggested_slots") or []
+    msg_s = user_message.strip()
+    m_num = re.match(r"^\s*(?:option\s*|slot\s*|number\s*)?([123])\b\s*[.!]?\s*$", msg_s, re.IGNORECASE)
+    m_ord = re.match(r"^\s*(first|second|third|1st|2nd|3rd)\b", msg_s, re.IGNORECASE)
+    if slots and (m_num or m_ord):
+        ord_map = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2}
+        idx = (int(m_num.group(1)) - 1) if m_num else ord_map[m_ord.group(1).lower()]
+        if 0 <= idx < len(slots):
+            from datetime import datetime as _dtmod
+            try:
+                dt = _dtmod.fromisoformat(slots[idx]["iso"])
+                when = slots[idx]["label"]
+            except Exception:
+                dt, when = None, None
+
+    if dt is None:
+        dt, when = _parse_visit_time(user_message)
 
     # Real availability check against our own bookings — "is that slot free?"
     if dt:
@@ -1277,13 +1325,19 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     # ── Ping the broker via WhatsApp to confirm they're free ─────────────────
     # This is the two-way scheduling flow: broker replies YES → meeting is locked in
     # on both calendars; NO → buyer is asked to suggest another time.
+    broker_asked = False
     try:
         from database.supabase_client import get_broker_for_area
         from agent.broker_confirmation import ask_broker_availability
         area_for_broker = conv.requirements.get("area") or "Lucknow"
         broker = get_broker_for_area(area_for_broker) or {}
-        if broker.get("phone"):
-            ask_broker_availability(
+        # Fall back to a configured broker WhatsApp number if the area's broker record
+        # has none — otherwise the auto-confirmation loop silently never fires.
+        broker_phone = (broker.get("phone")
+                        or os.environ.get("BROKER_WHATSAPP_PHONE")
+                        or os.environ.get("WHATSAPP_BROKER_PHONE"))
+        if broker_phone and dt:
+            broker_asked = ask_broker_availability(
                 buyer_name=name,
                 buyer_phone=phone,
                 buyer_session_id=conv.session_id,
@@ -1292,7 +1346,7 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
                 property_id=pending.get("property_id"),
                 lead_id=pending.get("lead_id"),
                 meeting_id=meeting_id,
-                broker_phone=broker["phone"],
+                broker_phone=broker_phone,
             )
     except Exception as e:
         logger.warning(f"ask_broker_availability failed (non-fatal): {e}")
@@ -1321,7 +1375,13 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         logger.debug(f"SMS skipped: {_sms_err}")
 
     property_part = " for the property you liked" if pending.get("property_id") else ""
-    base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
+    if broker_asked:
+        # AI is actively confirming with the broker — set the buyer's expectation accordingly.
+        base = (f"Perfect, {name}! 🕐 I'm checking *{when}*{property_part} with our property "
+                f"consultant right now — I'll confirm the moment they reply. "
+                f"Need a different time? Just tell me.")
+    else:
+        base = VISIT_SCHEDULED_TEMPLATE.format(name=name, when=when, property_part=property_part, phone=phone)
     return base + cal_line
 
 
@@ -1407,6 +1467,22 @@ def _fmt_visit(dt) -> str:
     return dt.strftime("%A, %d %b") + f" at {h12}{mm} {ap}"
 
 
+def _suggest_visit_slots() -> list[dict]:
+    """Three easy, concrete upcoming slots the buyer can pick from (or change)."""
+    from datetime import datetime, timedelta
+    now = datetime.now()
+
+    def next_weekday(weekday: int, hour: int):  # 5=Sat, 6=Sun
+        days = (weekday - now.weekday()) % 7
+        days = days or 7  # always a FUTURE day
+        return (now + timedelta(days=days)).replace(hour=hour, minute=0, second=0, microsecond=0)
+
+    tomorrow = (now + timedelta(days=1)).replace(hour=11, minute=0, second=0, microsecond=0)
+    saturday = next_weekday(5, 16)
+    sunday   = next_weekday(6, 11)
+    return [{"iso": dt.isoformat(), "label": _fmt_visit(dt)} for dt in (tomorrow, saturday, sunday)]
+
+
 def _handle_emi(conv: ConversationManager, user_name: str | None) -> str:
     """Give an indicative home-loan EMI for the property in focus (or the budget)."""
     cards = conv.requirements.get("_last_shown_cards") or []
@@ -1449,6 +1525,14 @@ def _handle_emi(conv: ConversationManager, user_name: str | None) -> str:
 
 
 def _ask_for_contact(conv: ConversationManager, user_name: str | None) -> str:
+    # If we already know their name (e.g. from the WhatsApp profile), don't ask for it
+    # again — just request the phone number warmly.
+    profile = conv.requirements.get("_profile") or {}
+    if profile.get("name") and not profile.get("phone"):
+        nm = profile["name"]
+        return (f"Wonderful, {nm}! I'd be glad to arrange that. Could you share your "
+                f"10-digit mobile number so our property consultant can reach you to set up the visit?")
+
     messages = [{"role": "system", "content": _sys(user_name)}]
     messages += conv.get_history_for_llm()
     messages.append({
@@ -1579,6 +1663,12 @@ def _compare_properties(
             "- If they're comparing, point out the key practical differences (price, size, BHK, location, "
             "standout amenity, proximity) and give a genuine recommendation.\n"
             "- If they want detail on one property, describe it warmly.\n"
+            "- If they ask whether the PRICE is NEGOTIABLE or want a discount, say warmly that there's "
+            "often some room to negotiate and our consultant can take it up with the owner on their "
+            "behalf during the visit — do NOT invent a specific discount or new price.\n"
+            "- If they ask about possession / ready-to-move / age / floor / facing / parking and it's in "
+            "the summary, answer from it; if it's NOT listed, say you'll confirm that exact detail with "
+            "our consultant — do not guess.\n"
             "Keep it friendly and human. End naturally (offer a visit only if it fits).\n\n"
             "⚠️ Use ONLY the facts in the summary above — never invent prices, amenities, distances, or features."
         ),

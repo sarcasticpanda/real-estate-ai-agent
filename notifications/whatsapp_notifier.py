@@ -71,39 +71,75 @@ def _send(to_phone: str, message: str) -> bool:
         return False
 
 
-def send_image(to_phone: str, image_url: str, caption: str = "") -> bool:
-    """
-    Send an image message (property photo) by public URL with an optional caption.
-    Best-effort — logs and returns False on failure, never raises.
-    """
-    if not PHONE_NUMBER_ID or not ACCESS_TOKEN or not image_url:
-        return False
-
+def _normalize_phone(to_phone: str) -> str:
     phone = to_phone.replace("+", "").replace(" ", "").replace("-", "")
     if phone.startswith("0"):
         phone = phone[1:]
     if not phone.startswith("91") and len(phone) == 10:
         phone = "91" + phone
+    return phone
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": phone,
-        "type": "image",
-        "image": {"link": image_url},
-    }
+
+def _upload_media(image_url: str) -> str | None:
+    """
+    Download an image from a public URL and upload it to WhatsApp's media endpoint,
+    returning a media_id. WhatsApp often refuses third-party 'link' images (Unsplash,
+    redirects, no file extension), so uploading the bytes ourselves is far more reliable.
+    Returns None on any failure.
+    """
+    try:
+        img = requests.get(image_url, timeout=15)
+        img.raise_for_status()
+        content_type = img.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+        if content_type not in ("image/jpeg", "image/png"):
+            content_type = "image/jpeg"
+        ext = "png" if content_type == "image/png" else "jpg"
+        files = {
+            "file": (f"property.{ext}", img.content, content_type),
+        }
+        data = {"messaging_product": "whatsapp", "type": content_type}
+        resp = requests.post(
+            f"{GRAPH_API_URL}/{PHONE_NUMBER_ID}/media",
+            headers={"Authorization": f"Bearer {ACCESS_TOKEN}"},
+            files=files,
+            data=data,
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except Exception as e:
+        logger.warning(f"WhatsApp media upload failed: {e}")
+        return None
+
+
+def send_image(to_phone: str, image_url: str, caption: str = "") -> bool:
+    """
+    Send a property photo with an optional caption. Tries the reliable media-upload path
+    first (download bytes -> upload -> send by media_id); falls back to the raw link.
+    Best-effort — logs and returns False on failure, never raises.
+    """
+    if not PHONE_NUMBER_ID or not ACCESS_TOKEN or not image_url:
+        return False
+
+    phone = _normalize_phone(to_phone)
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+
+    image_obj: dict
+    media_id = _upload_media(image_url)
+    if media_id:
+        image_obj = {"id": media_id}
+    else:
+        image_obj = {"link": image_url}  # fallback
     if caption:
-        payload["image"]["caption"] = caption[:1024]
+        image_obj["caption"] = caption[:1024]
 
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-    }
+    payload = {"messaging_product": "whatsapp", "to": phone, "type": "image", "image": image_obj}
     try:
         resp = requests.post(
             f"{GRAPH_API_URL}/{PHONE_NUMBER_ID}/messages",
             json=payload,
             headers=headers,
-            timeout=15,
+            timeout=20,
         )
         resp.raise_for_status()
         return True

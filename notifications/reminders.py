@@ -59,19 +59,35 @@ def send_due_reminders(hours_ahead: int = 24) -> dict:
         when = _when(m)
         prop = m.get("property_id") or ""
 
-        # Buyer reminder (only if we have their email)
-        if not m.get("customer_reminded") and lead.get("email"):
-            try:
-                subj = f"Reminder: your property visit {when} — Riya"
-                body = (f"Hi {name},\n\nThis is a friendly reminder about your property visit on "
-                        f"{when} in {area}{(' (ref ' + prop + ')') if prop else ''}.\n\n"
-                        "Our consultant will be in touch to confirm the exact details. "
-                        "See you there!\n\n— Riya, your property assistant")
-                if _send(lead["email"], subj, body.replace("\n", "<br>"), body):
-                    summary["buyer_sent"] += 1
-            except Exception as e:
-                logger.error(f"buyer reminder failed: {e}")
-                summary["errors"] += 1
+        # Buyer reminder — email if we have it, AND WhatsApp if we have their phone
+        # (messaging-channel buyers usually give a phone, not an email).
+        if not m.get("customer_reminded"):
+            buyer_notified = False
+            if lead.get("email"):
+                try:
+                    subj = f"Reminder: your property visit {when} — Riya"
+                    body = (f"Hi {name},\n\nThis is a friendly reminder about your property visit on "
+                            f"{when} in {area}{(' (ref ' + prop + ')') if prop else ''}.\n\n"
+                            "Our consultant will be in touch to confirm the exact details. "
+                            "See you there!\n\n— Riya, your property assistant")
+                    if _send(lead["email"], subj, body.replace("\n", "<br>"), body):
+                        buyer_notified = True
+                except Exception as e:
+                    logger.error(f"buyer email reminder failed: {e}")
+                    summary["errors"] += 1
+            if lead.get("phone"):
+                # Best-effort WhatsApp. In dev mode / outside the 24h window this may need an
+                # approved template; failures are logged and never block the email path.
+                try:
+                    from notifications.whatsapp_notifier import _send as _wa_send
+                    msg = (f"Hi {name}! 🏠 A friendly reminder about your property visit on *{when}* "
+                           f"in {area}. Our consultant will confirm the exact details shortly. See you there! — Riya")
+                    if _wa_send(lead["phone"], msg):
+                        buyer_notified = True
+                except Exception as e:
+                    logger.warning(f"buyer WhatsApp reminder failed: {e}")
+            if buyer_notified:
+                summary["buyer_sent"] += 1
 
         # Broker reminder
         if not m.get("broker_reminded"):
