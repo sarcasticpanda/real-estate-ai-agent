@@ -72,6 +72,69 @@ def _day_schedule_note(proposed_dt: datetime | None) -> str:
         return ""
 
 
+def is_configured_broker(phone: str) -> bool:
+    """True if this WhatsApp number is the configured broker."""
+    configured = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE") or ""
+    def _n(p): return re.sub(r"\D", "", p or "")[-10:]
+    return bool(configured) and _n(phone) == _n(configured)
+
+
+def _fmt_when(iso: str) -> str:
+    from datetime import datetime
+    try:
+        dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        h = dt.hour % 12 or 12
+        ap = "am" if dt.hour < 12 else "pm"
+        mm = f":{dt.minute:02d}" if dt.minute else ""
+        return dt.strftime("%a, %d %b") + f" at {h}{mm} {ap}"
+    except Exception:
+        return str(iso)[:16]
+
+
+def _broker_meetings_summary() -> str:
+    """List the broker's upcoming (non-cancelled) visits with customer details."""
+    from database.supabase_client import get_client
+    from datetime import datetime, timezone
+    try:
+        c = get_client()
+        now = datetime.now(timezone.utc).isoformat()
+        rows = (c.table("meetings").select("*, leads(name,phone)")
+                .gte("scheduled_at", now).neq("status", "cancelled")
+                .order("scheduled_at").limit(10).execute().data) or []
+    except Exception as e:
+        logger.warning(f"broker meetings summary failed: {e}")
+        return "Couldn't fetch your visits right now — please try again in a moment."
+    if not rows:
+        return "📋 You have no upcoming visits scheduled right now."
+    lines = ["📋 *Your upcoming visits:*"]
+    for m in rows:
+        lead = m.get("leads") or {}
+        nm = lead.get("name") or "Customer"
+        ph = lead.get("phone") or ""
+        status = (m.get("status") or "").lower()
+        tag = "✅" if status == "confirmed" else "⏳"
+        lines.append(f"{tag} {_fmt_when(m.get('scheduled_at'))} — {nm} ({ph})")
+    return "\n".join(lines)
+
+
+def handle_broker_command(broker_phone: str, text: str) -> str:
+    """The broker messaged us something that isn't a YES/NO confirmation reply."""
+    t = (text or "").lower().strip()
+    if re.search(r"\b(meetings?|schedule|appointments?|my visits?|bookings?|today|upcoming|agenda)\b", t):
+        return _broker_meetings_summary()
+    if re.search(r"\b(help|menu|commands?|what can you|options?)\b", t):
+        return ("👋 *Broker menu*\n"
+                "• *meetings* — your upcoming visits\n"
+                "• Reply *YES* / *NO* to a visit request I send you\n"
+                "• Reschedule: *RESCHEDULE <buyer phone> to <day time>*\n"
+                "  e.g. RESCHEDULE 9876543210 to Friday 5pm\n\n"
+                "I'll message you here whenever a customer wants to visit. 🏠")
+    # Default greeting/acknowledgement — broker, not buyer.
+    return ("Hi! 👋 You're set up as our property consultant. I'll message you here whenever a "
+            "customer wants to visit — just reply *YES* or *NO*.\n"
+            "Type *meetings* to see your upcoming visits, or *help* for options.")
+
+
 def ask_broker_availability(
     buyer_name: str,
     buyer_phone: str,

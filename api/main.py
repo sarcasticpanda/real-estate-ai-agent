@@ -2442,14 +2442,21 @@ async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str
         except Exception as e:
             logger.warning(f"WhatsApp mark_read error: {e}")
 
-    # Check if this is a broker YES/NO reply to a pending availability confirmation FIRST.
-    # If so, handle it and don't run it through the buyer-facing agent.
+    # If this number is the BROKER, route to the broker experience — never the buyer agent.
     try:
-        from agent.broker_confirmation import handle_broker_reply
+        from agent.broker_confirmation import (
+            handle_broker_reply, is_configured_broker, handle_broker_command,
+        )
+        if is_configured_broker(sender_phone):
+            if not handle_broker_reply(sender_phone, text):
+                # Not a YES/NO/reschedule reply — give a broker menu/ack, not the buyer flow.
+                _send(sender_phone, handle_broker_command(sender_phone, text))
+            return
+        # Non-broker: still let a pending confirmation match (defensive; returns False otherwise).
         if handle_broker_reply(sender_phone, text):
-            return  # handled — don't process as a normal buyer message
+            return
     except Exception as e:
-        logger.warning(f"broker_reply check failed: {e}")
+        logger.warning(f"broker routing failed: {e}")
 
     try:
         result = process_message(session_id=session_id, user_message=text,
