@@ -107,6 +107,17 @@ _COMPARE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Does the message carry any actual time/date signal? Used to avoid booking a non-time
+# message (e.g. "can I reschedule") as if it were a visit slot.
+_TIME_SIGNAL_RE = re.compile(
+    r"\b(mon(day)?|tue(s|sday)?|wed(nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?|"
+    r"today|tomorrow|tonight|morning|afternoon|evening|noon|midnight|weekend|"
+    r"\d{1,2}\s*(am|pm)|\d{1,2}:\d{2}|\d{1,2}\s*o'?clock|at\s+\d{1,2}|"
+    r"next\s+(week|mon|tue|wed|thu|fri|sat|sun)|this\s+(mon|tue|wed|thu|fri|sat|sun|weekend)|"
+    r"\d{1,2}\s*(st|nd|rd|th)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\d{1,2}/\d{1,2})\b",
+    re.IGNORECASE,
+)
+
 # Buyer asking to see/choose visit time slots ("give me slots", "what timings", "available times").
 _SHOW_SLOTS_RE = re.compile(
     r"\b(slots?|time\s*slots?|visit\s*times?|available\s*times?|timings?|"
@@ -1326,6 +1337,16 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
 
     if dt is None:
         dt, when = _parse_visit_time(user_message)
+
+    # Don't book a non-time message as a slot. If no real datetime AND no time signal at all
+    # (e.g. "can I reschedule", "actually wait", a question), ask for the time instead.
+    if dt is None and not _TIME_SIGNAL_RE.search(user_message):
+        # A reschedule/change phrasing → acknowledge it; otherwise a generic prompt.
+        if _RESCHEDULE_RE.search(user_message):
+            return (f"Of course, {name}! What new day and time would you like? "
+                    f"(e.g. \"Saturday 4 pm\" or \"tomorrow evening\")")
+        return (f"Sure, {name}! What day and time works for you? Reply with a slot number, "
+                f"or tell me something like \"Saturday 4 pm\" or \"tomorrow evening\".")
 
     # Real availability check against our own bookings — "is that slot free?"
     if dt:
