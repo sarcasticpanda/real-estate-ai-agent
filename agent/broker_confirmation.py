@@ -312,7 +312,10 @@ def _prepare_buyer_whatsapp_reschedule(conf: dict) -> None:
 
     from database.supabase_client import get_session, save_session, _normalize_indian_phone
 
-    session_id = f"wa_{_normalize_indian_phone(buyer_phone)}"
+    # Prefer the exact session we stored when asking the broker — the buyer's WhatsApp
+    # session is keyed by their WhatsApp number, which may differ from the phone they
+    # typed for the lead. Reconstructing from the typed phone primes the wrong session.
+    session_id = conf.get("buyer_session_id") or f"wa_{_normalize_indian_phone(buyer_phone)}"
     session = get_session(session_id)
     requirements = session.get("requirements") or {}
     profile = requirements.get("_profile") or {}

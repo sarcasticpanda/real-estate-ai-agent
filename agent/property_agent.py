@@ -1331,11 +1331,11 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         from agent.broker_confirmation import ask_broker_availability
         area_for_broker = conv.requirements.get("area") or "Lucknow"
         broker = get_broker_for_area(area_for_broker) or {}
-        # Fall back to a configured broker WhatsApp number if the area's broker record
-        # has none — otherwise the auto-confirmation loop silently never fires.
-        broker_phone = (broker.get("phone")
-                        or os.environ.get("BROKER_WHATSAPP_PHONE")
-                        or os.environ.get("WHATSAPP_BROKER_PHONE"))
+        # Single-broker setup: the configured BROKER_WHATSAPP_PHONE is the source of truth
+        # and takes priority over any (possibly placeholder) phone in the brokers table.
+        broker_phone = (os.environ.get("BROKER_WHATSAPP_PHONE")
+                        or os.environ.get("WHATSAPP_BROKER_PHONE")
+                        or broker.get("phone"))
         if broker_phone and dt:
             broker_asked = ask_broker_availability(
                 buyer_name=name,
