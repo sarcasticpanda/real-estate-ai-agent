@@ -469,7 +469,7 @@ def _handle_web_onboarding(conv: ConversationManager, user_message: str) -> dict
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def process_message(session_id: str, user_message: str, platform: str = "web",
-                    display_name: str | None = None) -> dict:
+                    display_name: str | None = None, user_phone: str | None = None) -> dict:
     """
     Process one user message.
     Returns {"reply": str, "properties": list[dict]}.
@@ -492,6 +492,16 @@ def process_message(session_id: str, user_message: str, platform: str = "web",
             clean = display_name.strip()
             if 1 < len(clean) <= 40 and clean.lower() not in _NOT_A_NAME:
                 profile["name"] = clean
+                conv.requirements["_profile"] = profile
+
+    # On WhatsApp the sender's number IS their contact number — capture it so we never
+    # ask "what's your number?" (we already have it). Stored as the 10-digit local part.
+    if user_phone:
+        profile = conv.requirements.get("_profile") or {}
+        if not profile.get("phone"):
+            digits = re.sub(r"\D", "", user_phone)
+            if len(digits) >= 10:
+                profile["phone"] = digits[-10:]
                 conv.requirements["_profile"] = profile
 
     # ── Guardrail (all platforms/stages): inappropriate or abusive input ─────

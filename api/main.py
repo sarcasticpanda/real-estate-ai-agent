@@ -2453,7 +2453,8 @@ async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str
 
     try:
         result = process_message(session_id=session_id, user_message=text,
-                                 platform="whatsapp", display_name=wa_name)
+                                 platform="whatsapp", display_name=wa_name,
+                                 user_phone=sender_phone)
         _send(sender_phone, result["reply"])
 
         # Send up to 2 property photos so WhatsApp feels as visual as the web cards.
