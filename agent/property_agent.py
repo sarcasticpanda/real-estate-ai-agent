@@ -91,6 +91,17 @@ _ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Clear intent to VISIT/see a property in person — should start booking, not comparison.
+# Catches roundabout phrasings ("can I go see it", "I'd like to view this one").
+_VISIT_INTENT_RE = re.compile(
+    r"\b(go\s*see|see\s*(it|this|the\s*(place|flat|property|house))|view\s*(it|this|the)|"
+    r"visit\s*(it|this|the)?|come\s*(see|view|over)|check\s*it\s*out|look\s*at\s*it|"
+    r"can\s*i\s*(see|view|visit|come)|i'?d\s*like\s*to\s*(see|visit|view)|"
+    r"want\s*to\s*(see|visit|view)|schedule\s*a?\s*visit|book\s*a?\s*visit|site\s*visit|"
+    r"see\s*it\s*in\s*person|show\s*me\s*around)\b",
+    re.IGNORECASE,
+)
+
 # "compare 1 and 2" / "which is better/cheaper" / "tell me about property 3" / "difference" /
 # "how far is it from X" / "what's the distance"
 _COMPARE_RE = re.compile(
@@ -638,6 +649,7 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     if (conv.requirements.get("_last_shown_text")
             and (_COMPARE_RE.search(user_message) or _PROPERTY_QA_RE.search(user_message))
             and not _ACTION_RE.search(user_message)
+            and not _VISIT_INTENT_RE.search(user_message)   # "the 2nd one, can I see it?" → book, not compare
             and not conv.is_lead_capture_stage()):
         return _compare_properties(conv, user_message, user_name), conv.requirements.get("_last_shown_cards", [])
 
@@ -758,6 +770,11 @@ def _route(conv: ConversationManager, user_message: str) -> tuple[str, list]:
     extracted = extract_intent(user_message, conv.get_history_for_llm())
     conv.requirements = merge_requirements(conv.requirements, extracted)
     lead_level = extracted.get("lead_intent_level", "none")
+
+    # Code-level visit intent: a clear "let me see/visit it" — even phrased roundabout — is
+    # a booking signal, even if the LLM under-tagged it. Only once we've shown properties.
+    if conv.requirements.get("_last_shown_cards") and _VISIT_INTENT_RE.search(user_message):
+        lead_level = "strong"
 
     # If LLM extraction completely failed, ask a clarifying question rather than searching blind
     if extracted.get("_extraction_failed"):
