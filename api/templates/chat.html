@@ -4,48 +4,42 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Riya — AI Property Consultant · Lucknow</title>
-<link rel="preconnect" href="https://api.fontshare.com">
-<link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root{
-  --ink:#141414;
-  --brand:#2b59ff;--brand-dk:#1a3ff0;--brand-lt:#e8edff;
-  --green:#0ca678;--green-lt:#e3fbf3;
-  --red:#e8590c;
-  --slate-50:#faf7f0;--slate-100:#f0ece2;--slate-200:#e4dfd2;
-  --slate-400:#8a8578;--slate-500:#5c5850;--slate-700:#2b2822;--slate-900:#141414;
-  --white:#fff;--paper:#f3efe4;
-  --nb:5px 5px 0 var(--ink);--nb-lg:7px 7px 0 var(--ink);--nb-sm:3px 3px 0 var(--ink);
-  --bd:2.5px solid var(--ink);
+  --brand:#2563eb;--brand-dk:#1d4ed8;--brand-lt:#eff6ff;
+  --green:#059669;--green-lt:#ecfdf5;
+  --red:#dc2626;
+  --slate-50:#f8fafc;--slate-100:#f1f5f9;--slate-200:#e2e8f0;
+  --slate-400:#94a3b8;--slate-500:#64748b;--slate-700:#334155;--slate-900:#0f172a;
+  --white:#fff;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);height:100dvh;display:flex;flex-direction:column;overflow:hidden;color:var(--ink)}
-h1,h2,h3,#hdr-name,.pcard-title,.pcard-price{font-family:'Clash Display','General Sans',sans-serif}
+body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 
-/* ── Header (neo-brutalist) ── */
+/* ── Header ── */
 #hdr{
   background:var(--brand);color:#fff;
-  padding:0 16px;min-height:62px;
+  padding:0 16px;height:60px;
   display:flex;align-items:center;gap:12px;
-  flex-shrink:0;border-bottom:3px solid var(--ink);
+  flex-shrink:0;box-shadow:0 2px 8px rgba(37,99,235,.3)
 }
-#hdr-avatar{width:40px;height:40px;border-radius:12px;background:#fff;color:var(--brand);
-  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;flex-shrink:0;
-  border:2.5px solid var(--ink);box-shadow:var(--nb-sm);font-family:'Clash Display',sans-serif}
+#hdr-avatar{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;flex-shrink:0}
 #hdr-info{flex:1}
-#hdr-name{font-weight:700;font-size:17px;line-height:1.1;letter-spacing:-.01em}
-#hdr-status{font-size:11px;opacity:.95;display:flex;align-items:center;gap:4px;font-weight:500}
-#hdr-status::before{content:'';width:8px;height:8px;border-radius:50%;background:#a3f7bf;border:1.5px solid var(--ink);flex-shrink:0}
-#hdr-actions{display:flex;gap:7px;flex-wrap:wrap}
+#hdr-name{font-weight:700;font-size:16px;line-height:1.2}
+#hdr-status{font-size:11px;opacity:.8;display:flex;align-items:center;gap:4px}
+#hdr-status::before{content:'';width:7px;height:7px;border-radius:50%;background:#4ade80;flex-shrink:0}
+#hdr-actions{display:flex;gap:8px}
 #hdr-actions a,#hdr-actions button{
-  padding:7px 12px;border-radius:10px;font-size:12px;font-weight:600;
-  background:#fff;color:var(--ink);border:2px solid var(--ink);cursor:pointer;text-decoration:none;
-  transition:transform .1s,box-shadow .1s;white-space:nowrap;box-shadow:2px 2px 0 var(--ink)
+  padding:6px 12px;border-radius:20px;font-size:12px;font-weight:600;
+  background:rgba(255,255,255,.15);color:#fff;border:none;cursor:pointer;text-decoration:none;
+  transition:background .15s;white-space:nowrap
 }
-#hdr-actions a:hover,#hdr-actions button:hover{transform:translate(-1px,-1px);box-shadow:3px 3px 0 var(--ink)}
-#hdr-actions a:active,#hdr-actions button:active{transform:translate(2px,2px);box-shadow:none}
-#sl-badge{display:none;background:var(--red);color:#fff;border-radius:99px;
-  padding:0 6px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:middle;border:1.5px solid var(--ink)}
+#hdr-actions a:hover,#hdr-actions button:hover{background:rgba(255,255,255,.25)}
+#sl-badge{display:none;background:#f43f5e;color:#fff;border-radius:99px;
+  padding:0 6px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:middle}
 
 /* ── Feed ── */
 #feed{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
@@ -57,13 +51,14 @@ h1,h2,h3,#hdr-name,.pcard-title,.pcard-price{font-family:'Clash Display','Genera
 .bubble-row.user{flex-direction:row-reverse;align-self:flex-end}
 .bubble-row.riya{align-self:flex-start}
 @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-.av{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;
-  font-size:12px;font-weight:700;flex-shrink:0;border:2px solid var(--ink);box-shadow:2px 2px 0 var(--ink)}
+.av{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:12px;font-weight:700;flex-shrink:0}
 .av-riya{background:var(--brand);color:#fff}
-.av-user{background:#ffd43b;color:var(--ink)}
-.bbl{padding:11px 15px;border-radius:14px;font-size:14px;line-height:1.6;word-break:break-word;max-width:100%;border:2px solid var(--ink)}
-.bbl-riya{background:#fff;color:var(--ink);border-bottom-left-radius:4px;box-shadow:var(--nb-sm)}
-.bbl-user{background:var(--brand);color:#fff;border-bottom-right-radius:4px;box-shadow:var(--nb-sm)}
+.av-user{background:var(--slate-400);color:#fff}
+.bbl{padding:10px 14px;border-radius:18px;font-size:14px;line-height:1.6;word-break:break-word;max-width:100%}
+.bbl-riya{background:#fff;color:var(--slate-900);border-bottom-left-radius:4px;
+  box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.bbl-user{background:var(--brand);color:#fff;border-bottom-right-radius:4px}
 .bbl-riya a{color:var(--brand);font-weight:500}
 .bbl strong{font-weight:700}
 .bbl em{font-style:italic}
@@ -80,12 +75,10 @@ h1,h2,h3,#hdr-name,.pcard-title,.pcard-price{font-family:'Clash Display','Genera
 
 /* ── Property cards ── */
 .cards-wrap{display:flex;flex-direction:column;gap:12px;width:100%;max-width:480px;align-self:flex-start;margin-left:38px}
-.pcard{background:#fff;border-radius:16px;overflow:hidden;box-shadow:var(--nb-lg);border:var(--bd)}
-.pcard-gallery{position:relative;height:200px;background:var(--slate-100);overflow:hidden;border-bottom:var(--bd)}
-.pcard-gallery img{width:100%;height:100%;object-fit:cover;cursor:pointer;
-  animation:kenburns 20s ease-in-out infinite alternate;will-change:transform}
-.pcard-gallery img:hover{animation-play-state:paused}
-@keyframes kenburns{0%{transform:scale(1) translate(0,0)}100%{transform:scale(1.13) translate(-2.5%,-2%)}}
+.pcard{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.10);border:1px solid var(--slate-200)}
+.pcard-gallery{position:relative;height:190px;background:var(--slate-100);overflow:hidden}
+.pcard-gallery img{width:100%;height:100%;object-fit:cover;cursor:pointer;transition:transform .3s}
+.pcard-gallery img:hover{transform:scale(1.04)}
 .gal-badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);color:#fff;
   font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;backdrop-filter:blur(4px)}
 .gal-nav{position:absolute;top:50%;transform:translateY(-50%);
@@ -104,51 +97,50 @@ h1,h2,h3,#hdr-name,.pcard-title,.pcard-price{font-family:'Clash Display','Genera
 .pcard-price{font-size:16px;font-weight:800;color:var(--brand);white-space:nowrap}
 .pcard-loc{font-size:12px;color:var(--slate-500);margin-bottom:8px;display:flex;align-items:center;gap:4px}
 .pcard-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
-.pchip{background:#fff3bf;color:var(--ink);font-size:11px;font-weight:600;
-  padding:3px 9px;border-radius:8px;border:1.5px solid var(--ink)}
+.pchip{background:var(--brand-lt);color:var(--brand);font-size:11px;font-weight:600;
+  padding:3px 9px;border-radius:20px}
 .pcard-pois{font-size:12px;color:var(--slate-500);margin-bottom:10px;line-height:1.8}
 .pcard-pois span{display:inline-block;margin-right:12px}
 .pcard-landmark{display:inline-flex;align-items:center;gap:4px;
   background:#f0fdf4;color:#166534;font-size:12px;font-weight:600;
   padding:4px 10px;border-radius:8px;margin-bottom:10px;border:1px solid #bbf7d0}
 .pcard-links{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
-.pcard-links a{font-size:12px;font-weight:600;color:var(--ink);text-decoration:none;
-  background:#fff;padding:5px 10px;border-radius:8px;border:2px solid var(--ink)}
-.pcard-links a:hover{background:var(--brand-lt)}
+.pcard-links a{font-size:12px;font-weight:600;color:var(--brand);text-decoration:none;
+  background:var(--brand-lt);padding:4px 10px;border-radius:6px;border:1px solid #c7d2fe}
+.pcard-links a:hover{background:#e0e7ff}
 .pcard-actions{display:flex;gap:8px}
-.btn-visit,.btn-cb,.btn-save{border:2.5px solid var(--ink);box-shadow:var(--nb-sm);transition:transform .1s,box-shadow .1s}
-.btn-visit:hover,.btn-cb:hover,.btn-save:hover{transform:translate(-1px,-1px);box-shadow:var(--nb)}
-.btn-visit:active,.btn-cb:active,.btn-save:active{transform:translate(2px,2px);box-shadow:none}
-.btn-visit{flex:2;padding:11px;background:var(--brand);color:#fff;
-  border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
-.btn-cb{flex:1;padding:11px;background:var(--green);color:#fff;
-  border-radius:10px;font-size:12px;font-weight:700;cursor:pointer}
-.btn-save{padding:11px 13px;background:#ffd43b;color:var(--ink);
-  border-radius:10px;font-size:14px;cursor:pointer}
-.btn-save.saved{background:var(--red);color:#fff}
+.btn-visit{flex:2;padding:10px;background:var(--brand);color:#fff;border:none;
+  border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s}
+.btn-visit:hover{background:var(--brand-dk)}
+.btn-cb{flex:1;padding:10px;background:var(--green-lt);color:var(--green);
+  border:1.5px solid #6ee7b7;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-cb:hover{background:#d1fae5}
+.btn-save{padding:10px 12px;background:#fff;color:var(--red);border:1.5px solid #fca5a5;
+  border-radius:10px;font-size:14px;cursor:pointer;transition:all .15s}
+.btn-save:hover,.btn-save.saved{background:#fee2e2}
 
 /* ── Input bar ── */
 #bar{
-  background:#fff;border-top:3px solid var(--ink);
-  padding:11px 12px;display:flex;gap:9px;align-items:center;flex-shrink:0;
+  background:#fff;border-top:1px solid var(--slate-200);
+  padding:10px 12px;display:flex;gap:8px;align-items:center;flex-shrink:0;
+  box-shadow:0 -2px 8px rgba(0,0,0,.05)
 }
 #inp{
-  flex:1;padding:12px 16px;border-radius:12px;border:2.5px solid var(--ink);
+  flex:1;padding:11px 16px;border-radius:24px;border:1.5px solid var(--slate-200);
   font-size:14px;font-family:inherit;outline:none;background:var(--slate-50);
-  box-shadow:var(--nb-sm);transition:box-shadow .12s
+  transition:border-color .15s,box-shadow .15s
 }
-#inp:focus{background:#fff;box-shadow:var(--nb)}
-#mic-btn{width:44px;height:44px;border-radius:12px;border:2.5px solid var(--ink);
+#inp:focus{border-color:var(--brand);background:#fff;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+#mic-btn{width:42px;height:42px;border-radius:50%;border:1.5px solid var(--slate-200);
   background:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;
-  justify-content:center;flex-shrink:0;box-shadow:var(--nb-sm);transition:transform .1s,box-shadow .1s}
-#mic-btn:hover{background:var(--brand-lt);transform:translate(-1px,-1px);box-shadow:var(--nb)}
-#mic-btn.listening{background:#ffe3e3;animation:pulse 1s infinite}
-#send-btn{width:44px;height:44px;border-radius:12px;border:2.5px solid var(--ink);background:var(--brand);
+  justify-content:center;transition:all .15s;flex-shrink:0}
+#mic-btn:hover{border-color:var(--brand);background:var(--brand-lt)}
+#mic-btn.listening{background:#fee2e2;border-color:var(--red);animation:pulse 1s infinite}
+#send-btn{width:42px;height:42px;border-radius:50%;border:none;background:var(--brand);
   color:#fff;font-size:18px;cursor:pointer;display:flex;align-items:center;
-  justify-content:center;flex-shrink:0;box-shadow:var(--nb-sm);transition:transform .1s,box-shadow .1s}
-#send-btn:hover{transform:translate(-1px,-1px);box-shadow:var(--nb)}
-#send-btn:active{transform:translate(2px,2px);box-shadow:none}
-#send-btn:disabled{background:var(--slate-200);color:var(--slate-400);cursor:default;box-shadow:var(--nb-sm)}
+  justify-content:center;transition:background .15s;flex-shrink:0}
+#send-btn:hover{background:var(--brand-dk)}
+#send-btn:disabled{background:var(--slate-200);cursor:default}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
 /* ── Lightbox ── */
@@ -163,13 +155,13 @@ h1,h2,h3,#hdr-name,.pcard-title,.pcard-price{font-family:'Clash Display','Genera
 #sl-panel,#login-panel,#mine-panel{display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:500;
   align-items:flex-end;justify-content:center;backdrop-filter:blur(2px)}
 #hdr-actions button, #hdr-actions a{cursor:pointer}
-#sl-box{background:var(--paper);border-radius:20px 20px 0 0;max-width:520px;width:100%;
-  max-height:90vh;overflow-y:auto;padding:22px;border:3px solid var(--ink);border-bottom:none}
-#sl-box h2{font-size:20px;font-weight:700;margin-bottom:14px;color:var(--ink)}
+#sl-box{background:var(--slate-50);border-radius:20px 20px 0 0;max-width:520px;width:100%;
+  max-height:90vh;overflow-y:auto;padding:20px}
+#sl-box h2{font-size:18px;font-weight:700;margin-bottom:14px;color:var(--slate-900)}
 #sl-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-#sl-close{background:#ffd43b;border:2px solid var(--ink);border-radius:10px;width:34px;height:34px;
-  font-size:18px;cursor:pointer;color:var(--ink);display:flex;align-items:center;justify-content:center;box-shadow:2px 2px 0 var(--ink)}
-#sl-close:hover{background:var(--red);color:#fff}
+#sl-close{background:var(--slate-100);border:none;border-radius:50%;width:32px;height:32px;
+  font-size:18px;cursor:pointer;color:var(--slate-500);display:flex;align-items:center;justify-content:center}
+#sl-close:hover{background:var(--slate-200)}
 
 @media(max-width:480px){
   .pcard-gallery{height:160px}

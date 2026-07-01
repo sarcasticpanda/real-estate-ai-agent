@@ -930,8 +930,17 @@ async def shared_css():
 
 
 @app.get("/", response_class=HTMLResponse)
+async def landing_page():
+    """Marketing landing page."""
+    tmpl = _TEMPLATES_DIR / "landing.html"
+    if tmpl.exists():
+        return HTMLResponse(tmpl.read_text(encoding="utf-8"))
+    return HTMLResponse((_TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8"))
+
+
+@app.get("/chat", response_class=HTMLResponse)
 async def web_chat():
-    """Chat UI — new professional design."""
+    """Chat UI."""
     tmpl = _TEMPLATES_DIR / "chat.html"
     if tmpl.exists():
         return HTMLResponse(tmpl.read_text(encoding="utf-8"))
