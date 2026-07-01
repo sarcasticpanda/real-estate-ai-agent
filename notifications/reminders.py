@@ -26,11 +26,14 @@ logger = logging.getLogger(__name__)
 
 def _when(meeting: dict) -> str:
     from datetime import datetime
+    from zoneinfo import ZoneInfo
     raw = meeting.get("scheduled_at")
     if not raw:
         return "soon (time to be confirmed)"
     try:
         dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))  # IST for the reader
         h12 = dt.hour % 12 or 12
         ap = "am" if dt.hour < 12 else "pm"
         return dt.strftime("%A, %d %b") + f" at {h12} {ap}"

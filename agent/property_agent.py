@@ -42,6 +42,12 @@ _AUTO_NUDGE_AFTER = 3
 # Beyond this straight-line distance, a property is NOT honestly "near" a named landmark.
 _LANDMARK_NEAR_KM = 2.5
 
+# Users are in Lucknow (IST) but the server runs in UTC. All visit times must be
+# interpreted/stored in IST, else "5 pm" becomes 5 pm UTC (= 10:30 pm IST) on the
+# broker dashboard and Google Calendar.
+from zoneinfo import ZoneInfo
+IST = ZoneInfo("Asia/Kolkata")
+
 # Words that are NOT valid names
 _NOT_A_NAME = {
     "hello", "hi", "hey", "hii", "hiii", "namaste", "yo", "yes", "no", "ok",
@@ -1537,7 +1543,7 @@ def _parse_visit_time(text: str):
     a concrete date/time can't be pinned (the broker confirms the exact slot anyway).
     """
     from datetime import datetime, timedelta
-    now = datetime.now()
+    now = datetime.now(IST)  # interpret the buyer's time in IST, not the server's UTC
     t = text.lower()
     weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -1593,7 +1599,7 @@ def _fmt_visit(dt) -> str:
 def _suggest_visit_slots() -> list[dict]:
     """Three easy, concrete upcoming slots the buyer can pick from (or change)."""
     from datetime import datetime, timedelta
-    now = datetime.now()
+    now = datetime.now(IST)  # IST, so suggested slots match the buyer's clock
 
     def next_weekday(weekday: int, hour: int):  # 5=Sat, 6=Sun
         days = (weekday - now.weekday()) % 7

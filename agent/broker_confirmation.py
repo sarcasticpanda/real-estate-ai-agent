@@ -102,8 +102,11 @@ def is_configured_broker(phone: str) -> bool:
 
 def _fmt_when(iso: str) -> str:
     from datetime import datetime
+    from zoneinfo import ZoneInfo
     try:
         dt = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))  # show IST, not UTC
         h = dt.hour % 12 or 12
         ap = "am" if dt.hour < 12 else "pm"
         mm = f":{dt.minute:02d}" if dt.minute else ""
