@@ -105,12 +105,12 @@ label.field-label{display:block;font-size:12px;font-weight:600;
 .stat-lbl{font-size:12px;color:var(--slate-500);margin-top:2px}
 
 /* Status badges */
-.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700}
-.badge-new{background:#dbeafe;color:#1e40af}
-.badge-visit{background:#e9d5ff;color:#6b21a8}
-.badge-won{background:#dcfce7;color:#166534}
-.badge-lost{background:#fee2e2;color:#991b1b}
-.badge-wait{background:#f1f5f9;color:#475569}
+.badge{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;font-weight:600}
+.badge-new{background:var(--brand-lt);color:var(--brand-dk)}
+.badge-visit{background:var(--amber-lt);color:#9a6a1e}
+.badge-won{background:#d7efe1;color:#0b5c3d}
+.badge-lost{background:var(--red-lt);color:#8f3521}
+.badge-wait{background:var(--slate-100);color:var(--slate-500)}
 
 /* Table */
 .table{width:100%;border-collapse:collapse;font-size:13px}

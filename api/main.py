@@ -737,7 +737,6 @@ async function reschedule(id){
   if(d.ok){toast('Rescheduled to '+d.new_time+' — buyer notified');load();}
   else toast('Error: '+(d.detail||'unknown'),'false');
 }
-document.getElementById('tok-input').addEventListener('change',load);
 load();
 </script>"""
     return _broker_page("Meetings & Visits", content, scripts=scripts,
@@ -844,7 +843,7 @@ async def broker_image_manager(property_id: str):
     pid = property_id
     content = f"""
 <div style="margin-bottom:14px;font-size:13px;color:#64748b">
-  <a href="/broker/edit/{pid}" style="color:#2563eb;font-weight:600">← Back to Edit</a> &nbsp;·&nbsp;
+  <a href="/broker/edit/{pid}" style="color:var(--brand);font-weight:600">← Back to Edit</a> &nbsp;·&nbsp;
   Drag to reorder · First = hero image · Uploading real photos removes Unsplash placeholders
 </div>
 <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
@@ -869,9 +868,9 @@ function render(urls){{
   const g=document.getElementById('img-grid');g.innerHTML='';
   urls.forEach((u,i)=>{{
     const c=document.createElement('div');
-    c.style.cssText='background:#fff;border:2px solid '+(i===0?'#2563eb':'#e2e8f0')+';border-radius:10px;overflow:hidden;position:relative;cursor:grab';
+    c.style.cssText='background:#fff;border:2px solid '+(i===0?'#0f7a52':'#e3dfd2')+';border-radius:10px;overflow:hidden;position:relative;cursor:grab';
     c.draggable=true;c.dataset.url=u;
-    c.innerHTML=(i===0?'<div style="position:absolute;top:6px;left:6px;background:#2563eb;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px">HERO</div>':'')
+    c.innerHTML=(i===0?'<div style="position:absolute;top:6px;left:6px;background:#0f7a52;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px">HERO</div>':'')
       +'<img src="'+u+'" style="width:100%;height:110px;object-fit:cover" onerror="this.style.background=\'#e2e8f0\'">'
       +'<button onclick="delImg(\''+encodeURIComponent(u)+'\')" style="position:absolute;top:6px;right:6px;background:#ef4444;color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:13px">×</button>';
     c.addEventListener('dragstart',e=>{{e.dataTransfer.setData('idx',i);c.style.opacity='.4';}});
@@ -883,9 +882,9 @@ function render(urls){{
       g.removeChild(mv);g.insertBefore(mv,items[i]);
       // Update hero badge
       [...g.children].forEach((el,j)=>{{
-        el.style.borderColor=j===0?'#2563eb':'#e2e8f0';
+        el.style.borderColor=j===0?'#0f7a52':'#e3dfd2';
         const hb=el.querySelector('div[style*="HERO"]');
-        if(j===0&&!hb){{const nb=document.createElement('div');nb.innerHTML='HERO';nb.style.cssText='position:absolute;top:6px;left:6px;background:#2563eb;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px';el.appendChild(nb);}}
+        if(j===0&&!hb){{const nb=document.createElement('div');nb.innerHTML='HERO';nb.style.cssText='position:absolute;top:6px;left:6px;background:#0f7a52;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px';el.appendChild(nb);}}
         else if(j!==0&&hb)hb.remove();
       }});
     }});
@@ -1498,6 +1497,52 @@ async def api_browse(area: str = "", bhk: int = None, min_price: int = None,
     return {"properties": out, "count": len(out)}
 
 
+@app.get("/api/featured")
+async def api_featured():
+    """Real data for the landing page — a broker-featurable hero property plus
+    honest inventory stats. No fabricated numbers: everything comes from the DB."""
+    from database.supabase_client import get_client
+    cl = get_client()
+    rows = cl.table("properties").select(
+        "id,area_name,city,bhk,price_inr,property_type,status,data"
+    ).eq("status", "available").limit(300).execute().data or []
+
+    def fmt(p):
+        if not p:
+            return "POA"
+        cr = p / 1e7
+        return f"₹{cr:.2f} Cr" if cr >= 1 else f"₹{p/1e5:.0f} L"
+
+    # Pick the broker-featured listing if one is flagged, else the first
+    # available listing that actually has a photo (so the hero never looks empty).
+    featured = None
+    with_img = []
+    for r in rows:
+        d = r.get("data") or {}
+        imgs = d.get("images") or []
+        item = {
+            "id": r["id"], "area": r.get("area_name") or "Lucknow",
+            "bhk": r.get("bhk"), "prop_type": r.get("property_type", "Home"),
+            "price_str": fmt(r.get("price_inr")),
+            "img": imgs[0] if imgs else "",
+        }
+        if imgs:
+            with_img.append(item)
+        if d.get("featured_home"):
+            featured = item
+    if not featured:
+        featured = with_img[0] if with_img else None
+
+    areas = {(r.get("area_name") or "").strip() for r in rows if r.get("area_name")}
+    return {
+        "featured": featured,
+        "stats": {
+            "listings": len(rows),
+            "areas": len(areas),
+        },
+    }
+
+
 # ── Broker dashboard ─────────────────────────────────────────────────────────
 # Lightweight, free: JSON endpoints + one static HTML page. Protected by a shared
 # token (set BROKER_TOKEN in .env; defaults to "broker" for local use).
@@ -1514,10 +1559,36 @@ def _check_broker_token(token: str | None):
         raise HTTPException(status_code=401, detail="Invalid broker token")
 
 
+@app.get("/broker/login", response_class=HTMLResponse)
+async def broker_login_page():
+    """Branded broker sign-in page — replaces pasting a raw token."""
+    tmpl = _TEMPLATES_DIR / "broker_login.html"
+    if tmpl.exists():
+        return HTMLResponse(tmpl.read_text(encoding="utf-8"))
+    return HTMLResponse("<p>Broker login unavailable.</p>", status_code=500)
+
+
+@app.post("/broker/auth")
+async def broker_auth(req: dict):
+    """Validate broker username + password, hand back the dashboard token.
+    A single broker account: set BROKER_USERNAME / BROKER_PASSWORD in .env."""
+    user = (req.get("username") or "").strip()
+    pwd = req.get("password") or ""
+    cfg_user = os.environ.get("BROKER_USERNAME", "broker")
+    cfg_pwd = os.environ.get("BROKER_PASSWORD", "")
+    token = _broker_token()
+    if not cfg_pwd or not token:
+        raise HTTPException(status_code=503, detail="Broker login is not configured")
+    ok = hmac.compare_digest(user, cfg_user) & hmac.compare_digest(pwd, cfg_pwd)
+    if not ok:
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    return {"token": token}
+
+
 @app.get("/broker/pipeline", response_class=HTMLResponse)
 async def broker_pipeline_page():
     stages = [
-        ("new","New","#2563eb"),("contacted","Contacted","#0891b2"),
+        ("new","New","#0f7a52"),("contacted","Contacted","#0891b2"),
         ("visit","Visit Scheduled","#7c3aed"),("met","Site Visited","#d97706"),
         ("negotiating","Negotiating","#ea580c"),("won","Won ✓","#16a34a"),
         ("waiting","On Hold","#64748b"),("lost","Not Interested","#dc2626"),
@@ -1574,7 +1645,7 @@ loadPipe();
 .kboard{display:flex;gap:10px;overflow-x:auto;padding-bottom:16px;min-height:70vh}
 .kcol{flex:0 0 210px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;display:flex;flex-direction:column}
 .kcol-hdr{padding:10px 12px;font-size:12px;font-weight:700;color:#334155;
-  border-bottom:3px solid var(--col-color,#2563eb);display:flex;justify-content:space-between}
+  border-bottom:3px solid var(--col-color,#0f7a52);display:flex;justify-content:space-between}
 .kcnt{background:#e2e8f0;border-radius:99px;padding:1px 8px;font-size:11px}
 .kcards{padding:8px;flex:1;min-height:80px}
 .klcard{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;
@@ -1680,13 +1751,13 @@ async function loadDash(){
   </tr>`).join('');
   document.getElementById('leads-wrap').innerHTML=leads.length?
     '<div class="card"><table class="table"><thead><tr><th>Name</th><th>Phone</th><th>Area</th><th>Budget</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>'
-    +'<p style="text-align:center;margin-top:10px"><a href="/broker/pipeline" style="color:#2563eb;font-size:13px;font-weight:600">View all leads in pipeline →</a></p>'
+    +'<p style="text-align:center;margin-top:10px"><a href="/broker/pipeline" style="color:var(--brand);font-size:13px;font-weight:600">View all leads in pipeline →</a></p>'
     :'<p style="color:#94a3b8;font-size:14px">No leads yet.</p>';
 }
 loadDash();
 </script>"""
     return _broker_page("Dashboard", content, active="DASH",
-        hdr_extra='<a href="/broker/pipeline" class="btn btn-primary" style="font-size:12px;padding:7px 14px">🎯 Open Pipeline</a>',
+        hdr_extra='<a href="/broker/pipeline" class="btn btn-primary" style="font-size:12px;padding:7px 14px"><i class="ph ph-funnel"></i> Open Pipeline</a>',
         scripts=scripts)
 
 
@@ -1996,7 +2067,6 @@ async function del(){{
   if(r.ok){{toast('Deleted');window.location='/broker/listings';}}
   else toast('Delete failed','false');
 }}
-document.getElementById('tok-input').addEventListener('change',loadProp);
 loadProp();
 </script>"""
     return _broker_page(f"Edit Property", content, active="LIST", scripts=scripts,
@@ -2032,7 +2102,7 @@ async function load(){
     +ps.map(p=>`<tr>
       <td><b>${p.bhk||''}${p.bhk?' BHK ':''} ${p.property_type||''}</b><br><span style="font-size:11px;color:#94a3b8">${p.id.replace('rag_property_','')}</span></td>
       <td>${p.area_name||'—'}</td>
-      <td style="font-weight:700;color:#2563eb">${fmt(p.price_inr)}</td>
+      <td style="font-weight:700;color:var(--brand)">${fmt(p.price_inr)}</td>
       <td><span class="badge ${p.status==='available'?'badge-won':p.status==='sold'?'badge-lost':'badge-wait'}">${p.status}</span></td>
       <td style="text-align:center">${p.images||0} 📷</td>
       <td style="display:flex;gap:6px;flex-wrap:wrap">
@@ -2044,7 +2114,6 @@ async function load(){
     +'</tbody></table></div>';
 }
 async function markSold(id){if(!confirm('Mark as sold?'))return;await fetch('/broker/properties/'+id+'/sold',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});toast('Marked sold');load();}
-document.getElementById('tok-input').addEventListener('change',load);
 load();
 </script>"""
     return _broker_page("My Listings", content, active="LIST",
@@ -2113,7 +2182,7 @@ async def broker_analytics_visual():
 """
     scripts = """<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-const C=['#2563eb','#0891b2','#7c3aed','#d97706','#16a34a','#dc2626','#64748b','#ea580c'];
+const C=['#0f7a52','#0891b2','#7c3aed','#d97706','#16a34a','#dc2626','#64748b','#ea580c'];
 async function loadAnalytics(){
   const t=tok();if(!t){document.getElementById('kpis').innerHTML='<p style="color:#94a3b8;grid-column:1/-1">Enter broker token in sidebar.</p>';return;}
   const r=await fetch('/api/broker/analytics/charts?token='+encodeURIComponent(t));
@@ -2121,7 +2190,7 @@ async function loadAnalytics(){
   const d=await r.json();
   const s=d.summary||{};
   document.getElementById('kpis').innerHTML=[
-    ['Total Leads',s.total_leads||0,'#2563eb'],['Meetings',s.meetings||0,'#0891b2'],
+    ['Total Leads',s.total_leads||0,'#0f7a52'],['Meetings',s.meetings||0,'#0891b2'],
     ['Won',s.won||0,'#16a34a'],[`${s.conversion_pct||0}%`,'Conversion','#d97706'],
     ['Properties',s.properties||0,'#334155'],['Available',s.available_props||0,'#059669'],
   ].map(([v,l,c])=>`<div class="stat"><div class="stat-val" style="color:${c}">${v}</div><div class="stat-lbl">${l}</div></div>`).join('');
@@ -2132,7 +2201,6 @@ async function loadAnalytics(){
   const w=d.weekly||[];mk('cWeekly','line',w.map(x=>x.week),w.map(x=>x.count),'Leads');
   const pt=d.prop_types||[];mk('cTypes','doughnut',pt.map(x=>x.type),pt.map(x=>x.count));
 }
-document.getElementById('tok-input').addEventListener('change',loadAnalytics);
 loadAnalytics();
 </script>"""
     return _broker_page("Analytics", content, active="ANAL", scripts=scripts)

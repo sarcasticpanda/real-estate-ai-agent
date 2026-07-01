@@ -4,26 +4,35 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Riya · Find your home in Lucknow</title>
-<meta name="description" content="Riya is an AI property consultant for Lucknow. Chat, discover verified homes, and book a visit that the broker confirms on your calendar.">
+<meta name="description" content="Riya is an AI property consultant for Lucknow. Chat on web, WhatsApp or Telegram, discover verified homes, and book a visit your broker confirms on the calendar.">
 <link rel="preconnect" href="https://api.fontshare.com">
 <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
 <style>
 :root{
   --ink:#12211b;--ink-soft:#4a5a52;
   --paper:#f6f4ec;--paper-2:#efece1;--card:#ffffff;
   --emerald:#0f7a52;--emerald-dk:#0b5c3d;--emerald-lt:#e7f3ec;
-  --gold:#c8892a;
-  --line:#e3dfd2;
-  --r:18px;
+  --line:#e3dfd2;--r:18px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
-body{font-family:'General Sans',system-ui,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased}
+body{font-family:'General Sans',system-ui,sans-serif;color:var(--ink);background:var(--paper);line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
 h1,h2,h3,.display{font-family:'Clash Display','General Sans',sans-serif;letter-spacing:-.02em;line-height:1.02}
 a{color:inherit;text-decoration:none}
 .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
 .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
 .reveal.in{opacity:1;transform:none}
+
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:11px 20px;border-radius:12px;cursor:pointer;border:none;transition:transform .12s ease,box-shadow .2s ease,background .2s}
+.btn i{font-size:18px}
+.btn-primary{background:var(--emerald);color:#fff;box-shadow:0 6px 18px rgba(15,122,82,.28)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(15,122,82,.36);background:var(--emerald-dk)}
+.btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--ink)}
+.btn-ghost:hover{background:var(--ink);color:var(--paper)}
+.btn-lg{padding:15px 26px;font-size:16px;border-radius:14px}
 
 /* ── Nav ── */
 nav{position:sticky;top:0;z-index:50;background:rgba(246,244,236,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
@@ -33,90 +42,150 @@ nav{position:sticky;top:0;z-index:50;background:rgba(246,244,236,.82);backdrop-f
 .nav-links{display:flex;align-items:center;gap:28px;font-weight:500;font-size:15px}
 .nav-links a.muted{color:var(--ink-soft)}
 .nav-links a.muted:hover{color:var(--ink)}
-.btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:11px 20px;border-radius:12px;cursor:pointer;border:none;transition:transform .12s ease,box-shadow .2s ease,background .2s}
-.btn-primary{background:var(--emerald);color:#fff;box-shadow:0 6px 18px rgba(15,122,82,.28)}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(15,122,82,.36);background:var(--emerald-dk)}
-.btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--ink)}
-.btn-ghost:hover{background:var(--ink);color:var(--paper)}
-.btn-lg{padding:15px 26px;font-size:16px;border-radius:14px}
 @media(max-width:820px){.nav-links a.muted{display:none}}
 
 /* ── Hero ── */
-.hero{padding:56px 0 40px}
-.hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:52px;align-items:center}
+.hero{position:relative;padding:60px 0 70px;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-10%;left:-8%;width:44%;height:80%;
+  background:radial-gradient(circle,rgba(15,122,82,.16),transparent 70%);pointer-events:none;z-index:0}
+.hero::after{content:'';position:absolute;bottom:-20%;right:-6%;width:46%;height:90%;
+  background:radial-gradient(circle,rgba(200,137,42,.12),transparent 70%);pointer-events:none;z-index:0}
+.hero-grid{position:relative;z-index:1;display:grid;grid-template-columns:1.02fr .98fr;gap:48px;align-items:center}
 .eyebrow{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:13px;color:var(--emerald);background:var(--emerald-lt);padding:6px 13px;border-radius:99px;margin-bottom:22px}
-.eyebrow b{width:6px;height:6px;border-radius:50%;background:var(--emerald)}
-.hero h1{font-size:clamp(38px,5.4vw,66px);font-weight:700}
+.eyebrow .live{width:7px;height:7px;border-radius:50%;background:var(--emerald);position:relative}
+.eyebrow .live::after{content:'';position:absolute;inset:-4px;border-radius:50%;border:1.5px solid var(--emerald);opacity:.5;animation:ping 1.8s ease-out infinite}
+@keyframes ping{0%{transform:scale(.6);opacity:.6}100%{transform:scale(1.5);opacity:0}}
+.hero h1{font-size:clamp(38px,5.2vw,64px);font-weight:700}
 .hero h1 .it{font-style:italic;color:var(--emerald)}
-.hero p.sub{font-size:19px;color:var(--ink-soft);max-width:33ch;margin:22px 0 30px}
+.hero p.sub{font-size:19px;color:var(--ink-soft);max-width:34ch;margin:22px 0 28px}
 .hero-cta{display:flex;gap:14px;flex-wrap:wrap}
-.hero-trust{display:flex;gap:26px;margin-top:34px}
-.hero-trust .t b{font-family:'Clash Display';font-size:26px;font-weight:700;display:block}
+.channels{display:flex;align-items:center;gap:16px;margin-top:26px;color:var(--ink-soft);font-size:13.5px}
+.channels .ch{display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.channels .ch i{font-size:17px;color:var(--emerald)}
+.channels .sep{width:4px;height:4px;border-radius:50%;background:var(--line)}
+.hero-trust{display:flex;gap:30px;margin-top:32px;border-top:1px solid var(--line);padding-top:24px}
+.hero-trust .t b{font-family:'Clash Display';font-size:28px;font-weight:700;display:block;line-height:1}
 .hero-trust .t span{font-size:13px;color:var(--ink-soft)}
 
-.hero-visual{position:relative}
-.hero-photo{position:relative;border-radius:24px;overflow:hidden;aspect-ratio:4/4.6;box-shadow:0 30px 70px rgba(18,33,27,.22)}
-.hero-photo img{width:100%;height:100%;object-fit:cover;animation:drift 22s ease-in-out infinite alternate}
-@keyframes drift{0%{transform:scale(1.05) translate(0,0)}100%{transform:scale(1.16) translate(-3%,-2.5%)}}
-.float-card{position:absolute;left:-26px;bottom:38px;background:var(--card);border-radius:16px;padding:15px 18px;box-shadow:0 18px 40px rgba(18,33,27,.18);border:1px solid var(--line);display:flex;gap:13px;align-items:center;max-width:270px}
-.float-card .fc-ic{width:44px;height:44px;border-radius:12px;background:var(--emerald-lt);color:var(--emerald);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-.float-card .fc-t{font-weight:600;font-size:14px}
-.float-card .fc-s{font-size:12.5px;color:var(--ink-soft)}
-.float-pill{position:absolute;top:26px;right:-18px;background:var(--ink);color:var(--paper);padding:11px 16px;border-radius:14px;font-weight:600;font-size:14px;box-shadow:0 14px 30px rgba(18,33,27,.28)}
-@media(max-width:900px){.hero-grid{grid-template-columns:1fr;gap:36px}.hero-photo{aspect-ratio:4/3.4}.float-card{left:14px}.float-pill{right:14px}}
+/* ── Hero visual: device + demo + featured card ── */
+.hero-visual{position:relative;display:flex;justify-content:center;align-items:center;min-height:520px}
+.phone{position:relative;width:300px;background:#0e1c16;border-radius:34px;padding:12px;
+  box-shadow:0 40px 90px rgba(18,33,27,.35),0 0 0 1px rgba(255,255,255,.04);z-index:2}
+.phone-notch{position:absolute;top:20px;left:50%;transform:translateX(-50%);width:110px;height:22px;background:#0e1c16;border-radius:0 0 14px 14px;z-index:5}
+.phone-scr{background:var(--paper);border-radius:24px;overflow:hidden;height:540px;display:flex;flex-direction:column}
+.pchat-hdr{background:var(--emerald);color:#fff;padding:14px 16px 12px;display:flex;align-items:center;gap:10px}
+.pchat-hdr .pav{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-family:'Clash Display';font-weight:700}
+.pchat-hdr .pn{font-weight:600;font-size:14px;line-height:1.1}
+.pchat-hdr .ps{font-size:11px;opacity:.85;display:flex;align-items:center;gap:4px}
+.pchat-hdr .ps::before{content:'';width:6px;height:6px;border-radius:50%;background:#7ff0b8}
+.pchat-body{flex:1;padding:14px;display:flex;flex-direction:column;gap:9px;overflow:hidden}
+.dm{max-width:82%;padding:9px 13px;border-radius:15px;font-size:13px;line-height:1.45;opacity:0;transform:translateY(8px);animation:dmIn .35s ease forwards}
+@keyframes dmIn{to{opacity:1;transform:none}}
+.dm-r{align-self:flex-start;background:#fff;color:var(--ink);border-bottom-left-radius:5px;box-shadow:0 1px 4px rgba(18,33,27,.08)}
+.dm-u{align-self:flex-end;background:var(--emerald);color:#fff;border-bottom-right-radius:5px}
+.dm-card{align-self:flex-start;background:#fff;border-radius:14px;box-shadow:0 2px 10px rgba(18,33,27,.1);overflow:hidden;width:82%;opacity:0;transform:translateY(8px);animation:dmIn .35s ease forwards}
+.dm-card img{width:100%;height:82px;object-fit:cover;display:block}
+.dm-card .dc-b{padding:8px 11px}
+.dm-card .dc-t{font-size:12.5px;font-weight:600}
+.dm-card .dc-p{font-family:'Clash Display';font-weight:700;color:var(--emerald);font-size:13px}
+.dm-typing{align-self:flex-start;background:#fff;border-radius:15px;border-bottom-left-radius:5px;padding:11px 14px;display:flex;gap:4px;box-shadow:0 1px 4px rgba(18,33,27,.08)}
+.dm-typing span{width:6px;height:6px;border-radius:50%;background:#b7c4bd;animation:bnc .9s infinite}
+.dm-typing span:nth-child(2){animation-delay:.15s}.dm-typing span:nth-child(3){animation-delay:.3s}
+@keyframes bnc{0%,60%,100%{transform:none}30%{transform:translateY(-5px)}}
 
-/* ── Strip ── */
-.strip{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--paper-2)}
-.strip-in{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;padding:30px 0}
-.strip .s b{font-family:'Clash Display';font-size:30px;font-weight:700;display:block}
-.strip .s span{font-size:14px;color:var(--ink-soft)}
-@media(max-width:700px){.strip-in{grid-template-columns:repeat(2,1fr);gap:20px}}
+/* Featured real property card floating */
+.feat-float{position:absolute;bottom:24px;right:-8px;width:230px;background:var(--card);border-radius:16px;
+  box-shadow:0 22px 50px rgba(18,33,27,.22);border:1px solid var(--line);overflow:hidden;z-index:3;
+  animation:floaty 5s ease-in-out infinite}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+.feat-float img{width:100%;height:110px;object-fit:cover;display:block;background:var(--paper-2)}
+.feat-float .ff-tag{position:absolute;top:9px;left:9px;background:rgba(18,33,27,.72);color:#fff;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:20px;display:flex;align-items:center;gap:4px}
+.feat-float .ff-b{padding:11px 13px}
+.feat-float .ff-t{font-size:13px;font-weight:600}
+.feat-float .ff-l{font-size:11.5px;color:var(--ink-soft);margin-top:1px}
+.feat-float .ff-p{font-family:'Clash Display';font-weight:700;color:var(--emerald);font-size:16px;margin-top:5px}
+.cal-pill{position:absolute;top:38px;left:-16px;background:var(--card);border:1px solid var(--line);
+  border-radius:13px;padding:9px 13px;display:flex;align-items:center;gap:9px;z-index:4;
+  box-shadow:0 16px 36px rgba(18,33,27,.16);animation:floaty 6s ease-in-out infinite .6s}
+.cal-pill i{width:32px;height:32px;border-radius:9px;background:var(--emerald-lt);color:var(--emerald);display:flex;align-items:center;justify-content:center;font-size:17px}
+.cal-pill .cp-t{font-size:12.5px;font-weight:600;line-height:1.2}
+.cal-pill .cp-s{font-size:11px;color:var(--ink-soft)}
+@media(max-width:900px){
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .hero-visual{min-height:auto;margin-top:8px}
+  .feat-float{right:-4px}
+}
+@media(max-width:420px){.feat-float{display:none}.cal-pill{left:-6px}}
+
+/* ── Area marquee ── */
+.marquee{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--paper-2);padding:15px 0;overflow:hidden;position:relative}
+.marquee-track{display:flex;gap:34px;width:max-content;animation:scroll 34s linear infinite;white-space:nowrap}
+.marquee:hover .marquee-track{animation-play-state:paused}
+.marquee-track span{font-family:'Clash Display';font-weight:600;font-size:16px;color:var(--ink-soft);display:inline-flex;align-items:center;gap:34px}
+.marquee-track span::after{content:'';width:5px;height:5px;border-radius:50%;background:var(--emerald)}
+@keyframes scroll{to{transform:translateX(-50%)}}
 
 /* ── Sections ── */
-section.pad{padding:84px 0}
-.sec-head{max-width:600px;margin-bottom:44px}
+section.pad{padding:76px 0}
+.sec-head{max-width:600px;margin-bottom:40px}
+.sec-head .k{font-weight:600;font-size:13px;color:var(--emerald);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px}
 .sec-head h2{font-size:clamp(30px,3.6vw,44px);font-weight:700}
 .sec-head p{font-size:17px;color:var(--ink-soft);margin-top:14px}
 
-/* Featured cards */
-.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+/* Feature cards */
+.feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
 .fcard{background:var(--card);border-radius:var(--r);overflow:hidden;border:1px solid var(--line);transition:transform .25s ease,box-shadow .25s ease}
 .fcard:hover{transform:translateY(-5px);box-shadow:0 22px 44px rgba(18,33,27,.14)}
-.fcard-img{aspect-ratio:16/11;overflow:hidden}
+.fcard-img{aspect-ratio:16/11;overflow:hidden;background:var(--paper-2);position:relative}
 .fcard-img img{width:100%;height:100%;object-fit:cover;transition:transform .5s ease}
+.fcard-img .no{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-soft);font-size:13px}
 .fcard:hover .fcard-img img{transform:scale(1.06)}
 .fcard-b{padding:18px}
 .fcard-b .row{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.fcard-b h3{font-size:18px;font-weight:600}
+.fcard-b h3{font-size:17px;font-weight:600}
 .fcard-b .price{font-family:'Clash Display';font-weight:700;color:var(--emerald);font-size:18px;white-space:nowrap}
-.fcard-b .loc{color:var(--ink-soft);font-size:14px;margin:4px 0 12px}
+.fcard-b .loc{color:var(--ink-soft);font-size:13.5px;margin:4px 0 12px;display:flex;align-items:center;gap:5px}
 .fcard-b .tags{display:flex;gap:8px;flex-wrap:wrap}
 .tag{font-size:12.5px;font-weight:500;color:var(--ink-soft);background:var(--paper-2);border:1px solid var(--line);padding:4px 11px;border-radius:9px}
 @media(max-width:900px){.feat-grid{grid-template-columns:1fr;max-width:440px;margin:0 auto}}
 
+/* Why cards (feature blocks) */
+.why-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+.why{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:24px}
+.why i{width:46px;height:46px;border-radius:13px;background:var(--emerald-lt);color:var(--emerald);display:flex;align-items:center;justify-content:center;font-size:23px;margin-bottom:16px}
+.why h3{font-size:17px;font-weight:600;margin-bottom:6px}
+.why p{font-size:14px;color:var(--ink-soft)}
+@media(max-width:900px){.why-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.why-grid{grid-template-columns:1fr}}
+
 /* How it works */
 .how{background:var(--ink);color:var(--paper)}
-.how .sec-head h2{color:#fff}
-.how .sec-head p{color:#b7c4bd}
-.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.how .sec-head h2{color:#fff}.how .sec-head p{color:#b7c4bd}.how .sec-head .k{color:#7fdcae}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
 .step{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:var(--r);padding:26px}
 .step .n{font-family:'Clash Display';font-size:15px;font-weight:600;color:var(--emerald);background:var(--emerald-lt);width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:18px}
-.step h3{font-size:20px;font-weight:600;margin-bottom:8px}
+.step h3{font-size:19px;font-weight:600;margin-bottom:8px}
 .step p{color:#b7c4bd;font-size:15px}
 @media(max-width:820px){.steps{grid-template-columns:1fr}}
 
 /* CTA band */
-.cta-band{text-align:center;padding:90px 0}
-.cta-band h2{font-size:clamp(32px,4vw,50px);font-weight:700}
-.cta-band p{font-size:18px;color:var(--ink-soft);margin:16px auto 30px;max-width:44ch}
+.cta-band{padding:64px 0}
+.cta-inner{background:var(--emerald);border-radius:26px;padding:52px 44px;text-align:center;color:#fff;position:relative;overflow:hidden}
+.cta-inner::after{content:'';position:absolute;top:-40%;right:-10%;width:50%;height:180%;background:radial-gradient(circle,rgba(255,255,255,.12),transparent 70%)}
+.cta-inner h2{font-size:clamp(28px,3.6vw,42px);font-weight:700;position:relative}
+.cta-inner p{font-size:17px;color:rgba(255,255,255,.85);margin:14px auto 26px;max-width:46ch;position:relative}
+.cta-inner .btn-primary{background:#fff;color:var(--emerald);box-shadow:0 8px 22px rgba(0,0,0,.18);position:relative}
+.cta-inner .btn-primary:hover{background:var(--paper)}
 
 /* Footer */
 footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);font-size:14px}
 .foot-in{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.foot-in .fl{display:flex;gap:18px}
 
 @media(prefers-reduced-motion:reduce){
-  .hero-photo img{animation:none}
+  .feat-float,.cal-pill,.marquee-track,.eyebrow .live::after{animation:none}
   .reveal{opacity:1;transform:none;transition:none}
+  .dm,.dm-card{opacity:1;transform:none;animation:none}
 }
 </style>
 </head>
@@ -128,8 +197,8 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
     <div class="nav-links">
       <a class="muted" href="/properties/browse">Browse homes</a>
       <a class="muted" href="#how">How it works</a>
-      <a class="muted" href="/chat">Talk to Riya</a>
-      <a class="btn btn-primary" href="/chat">Chat with Riya</a>
+      <a class="muted" href="/broker/login">Broker sign in</a>
+      <a class="btn btn-primary" href="/chat"><i class="ph ph-chat-circle-dots"></i> Chat with Riya</a>
     </div>
   </div>
 </nav>
@@ -137,66 +206,84 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
 <header class="hero">
   <div class="wrap hero-grid">
     <div class="reveal">
-      <span class="eyebrow"><b></b> AI property consultant · Lucknow</span>
+      <span class="eyebrow"><span class="live"></span> AI property consultant · Lucknow</span>
       <h1>Find a home you<br>love, the <span class="it">easy</span> way.</h1>
       <p class="sub">Tell Riya what you want. She finds verified homes, shows you around, and books a visit your broker confirms.</p>
       <div class="hero-cta">
-        <a class="btn btn-primary btn-lg" href="/chat">Chat with Riya</a>
-        <a class="btn btn-ghost btn-lg" href="/properties/browse">Browse homes</a>
+        <a class="btn btn-primary btn-lg" href="/chat"><i class="ph ph-chat-circle-dots"></i> Chat with Riya</a>
+        <a class="btn btn-ghost btn-lg" href="/properties/browse"><i class="ph ph-house-line"></i> Browse homes</a>
+      </div>
+      <div class="channels">
+        <span class="ch"><i class="ph-fill ph-globe"></i> Web</span><span class="sep"></span>
+        <span class="ch"><i class="ph-fill ph-whatsapp-logo"></i> WhatsApp</span><span class="sep"></span>
+        <span class="ch"><i class="ph-fill ph-telegram-logo"></i> Telegram</span>
       </div>
       <div class="hero-trust">
-        <div class="t"><b>110+</b><span>verified homes</span></div>
-        <div class="t"><b>25+</b><span>Lucknow areas</span></div>
-        <div class="t"><b>2 min</b><span>to a booked visit</span></div>
+        <div class="t"><b id="st-homes">110+</b><span>verified homes</span></div>
+        <div class="t"><b id="st-areas">25+</b><span>Lucknow areas</span></div>
+        <div class="t"><b>3</b><span>ways to chat</span></div>
       </div>
     </div>
+
     <div class="hero-visual reveal">
-      <div class="hero-photo">
-        <img src="https://images.unsplash.com/photo-1600585154340-be6161a56a0c?w=900&q=80&fit=crop&auto=format" alt="A bright modern home in Lucknow">
+      <div class="cal-pill">
+        <i class="ph ph-calendar-check"></i>
+        <div><div class="cp-t">Visit booked</div><div class="cp-s">added to calendar</div></div>
       </div>
-      <div class="float-pill">Gomti Nagar · from ₹36 L</div>
-      <div class="float-card">
-        <div class="fc-ic">✓</div>
-        <div><div class="fc-t">Visit confirmed for Saturday</div><div class="fc-s">Broker approved · added to calendar</div></div>
+      <div class="phone">
+        <div class="phone-scr">
+          <div class="pchat-hdr">
+            <div class="pav">R</div>
+            <div><div class="pn">Riya</div><div class="ps">online · Lucknow</div></div>
+          </div>
+          <div class="pchat-body" id="demo"></div>
+        </div>
+      </div>
+      <div class="feat-float" id="feat-float">
+        <span class="ff-tag"><i class="ph-fill ph-star"></i> Featured</span>
+        <img id="ff-img" alt="Featured home" style="display:none" onerror="this.style.visibility='hidden'">
+        <div class="ff-b">
+          <div class="ff-t" id="ff-t">Featured home</div>
+          <div class="ff-l" id="ff-l">Lucknow</div>
+          <div class="ff-p" id="ff-p">—</div>
+        </div>
       </div>
     </div>
   </div>
 </header>
 
-<div class="strip">
-  <div class="wrap strip-in">
-    <div class="s reveal"><b>WhatsApp</b><span>chat where you already are</span></div>
-    <div class="s reveal"><b>Live distances</b><span>metro, hospital, school</span></div>
-    <div class="s reveal"><b>Real photos</b><span>every listing verified</span></div>
-    <div class="s reveal"><b>Calendar</b><span>visits booked automatically</span></div>
+<div class="marquee">
+  <div class="marquee-track">
+    <span>Gomti Nagar</span><span>Hazratganj</span><span>Aliganj</span><span>Indira Nagar</span><span>Alambagh</span><span>Jankipuram</span><span>Vibhuti Khand</span><span>Mahanagar</span>
+    <span>Gomti Nagar</span><span>Hazratganj</span><span>Aliganj</span><span>Indira Nagar</span><span>Alambagh</span><span>Jankipuram</span><span>Vibhuti Khand</span><span>Mahanagar</span>
   </div>
 </div>
 
 <section class="pad">
   <div class="wrap">
     <div class="sec-head reveal">
-      <h2>A few homes buyers loved this week</h2>
-      <p>Real listings from Riya's Lucknow inventory. Open the chat to see the full set matched to your budget and area.</p>
+      <div class="k">Why Riya</div>
+      <h2>A broker's reach, without the runaround</h2>
+      <p>Everything you'd want from an agent — answered instantly, honestly, and on the app you already use.</p>
     </div>
-    <div class="feat-grid">
-      <a class="fcard reveal" href="/chat">
-        <div class="fcard-img"><img src="https://images.unsplash.com/photo-1570129477492-45c003edd2be?w=700&q=80&fit=crop&auto=format" alt="2 BHK in Gomti Nagar"></div>
-        <div class="fcard-b"><div class="row"><h3>2 BHK Flat</h3><span class="price">₹36 L</span></div>
-          <div class="loc">Gomtinagar Extension · 700 sqft</div>
-          <div class="tags"><span class="tag">Power backup</span><span class="tag">Reserved parking</span></div></div>
-      </a>
-      <a class="fcard reveal" href="/chat">
-        <div class="fcard-img"><img src="https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=700&q=80&fit=crop&auto=format" alt="3 BHK in Hazratganj"></div>
-        <div class="fcard-b"><div class="row"><h3>3 BHK Flat</h3><span class="price">₹1.2 Cr</span></div>
-          <div class="loc">Hazratganj · 1350 sqft · near metro</div>
-          <div class="tags"><span class="tag">Lift</span><span class="tag">Gated</span><span class="tag">CCTV</span></div></div>
-      </a>
-      <a class="fcard reveal" href="/chat">
-        <div class="fcard-img"><img src="https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=700&q=80&fit=crop&auto=format" alt="Independent house in Aliganj"></div>
-        <div class="fcard-b"><div class="row"><h3>Independent House</h3><span class="price">₹65 L</span></div>
-          <div class="loc">Aliganj · 3 BHK · park facing</div>
-          <div class="tags"><span class="tag">Garden</span><span class="tag">24×7 water</span></div></div>
-      </a>
+    <div class="why-grid">
+      <div class="why reveal"><i class="ph ph-magnifying-glass"></i><h3>Verified listings</h3><p>Real photos and honest availability — no dead listings or bait ads.</p></div>
+      <div class="why reveal"><i class="ph ph-map-pin-line"></i><h3>Live distances</h3><p>Metro, hospital and school distances computed for every home.</p></div>
+      <div class="why reveal"><i class="ph ph-calendar-check"></i><h3>Broker-confirmed visits</h3><p>Riya checks with the broker and books the slot on both calendars.</p></div>
+      <div class="why reveal"><i class="ph ph-chats-circle"></i><h3>Chat anywhere</h3><p>Web, WhatsApp or Telegram — pick up right where you left off.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="pad" style="padding-top:0">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="k">Live inventory</div>
+      <h2>Homes on Riya right now</h2>
+      <p>Pulled straight from the live listings. Open the chat to see the full set matched to your budget and area.</p>
+    </div>
+    <div class="feat-grid" id="live-grid">
+      <div class="fcard reveal"><div class="fcard-img"><div class="no">Loading homes…</div></div><div class="fcard-b"><div class="row"><h3>&nbsp;</h3></div></div></div>
     </div>
   </div>
 </section>
@@ -204,6 +291,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
 <section class="how pad" id="how">
   <div class="wrap">
     <div class="sec-head reveal">
+      <div class="k">How it works</div>
       <h2>From "just looking" to a booked visit</h2>
       <p>No forms, no call centres. Just a conversation that ends with a confirmed time.</p>
     </div>
@@ -217,9 +305,11 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
 
 <section class="cta-band">
   <div class="wrap reveal">
-    <h2>Your next home is a<br>conversation away.</h2>
-    <p>Start chatting with Riya. It is free, and there is no sign-up to look around.</p>
-    <a class="btn btn-primary btn-lg" href="/chat">Chat with Riya</a>
+    <div class="cta-inner">
+      <h2>Your next home is a<br>conversation away.</h2>
+      <p>Start chatting with Riya. It's free, and there's no sign-up to look around.</p>
+      <a class="btn btn-primary btn-lg" href="/chat"><i class="ph ph-chat-circle-dots"></i> Chat with Riya</a>
+    </div>
   </div>
 </section>
 
@@ -227,19 +317,104 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
   <div class="wrap foot-in">
     <a class="brand" href="/"><span class="dot">R</span> Riya</a>
     <div>Verified homes across Lucknow · Chat on web, WhatsApp or Telegram</div>
-    <div><a href="/properties/browse">Browse</a> · <a href="/chat">Chat</a></div>
+    <div class="fl"><a href="/properties/browse">Browse</a><a href="/chat">Chat</a><a href="/broker/login">Broker</a></div>
   </div>
 </footer>
 
 <script>
+/* ── Reveal on scroll (with safety net) ── */
 (function(){
   var els=[].slice.call(document.querySelectorAll('.reveal'));
   function showAll(){els.forEach(function(el){el.classList.add('in')});}
   if(!('IntersectionObserver' in window)){showAll();return;}
   var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.12,rootMargin:'0px 0px -8% 0px'});
   els.forEach(function(el){io.observe(el)});
-  // Safety net: never leave content permanently hidden (e.g. no-scroll, screenshot, tab in background)
   setTimeout(showAll,2600);
+})();
+
+/* ── Count-up stats ── */
+function countUp(el,target,suffix){
+  if(!el)return; var start=0,dur=1100,t0=null;
+  function step(ts){ if(!t0)t0=ts; var p=Math.min((ts-t0)/dur,1);
+    el.textContent=Math.floor(p*target)+(suffix||''); if(p<1)requestAnimationFrame(step); }
+  requestAnimationFrame(step);
+}
+
+/* ── Real data: featured property + stats + live grid ── */
+var FEAT_IMG='';
+(async function(){
+  try{
+    var d=await (await fetch('/api/featured')).json();
+    if(d.stats){
+      countUp(document.getElementById('st-homes'),d.stats.listings||110,'+');
+      countUp(document.getElementById('st-areas'),d.stats.areas||25,'+');
+    }
+    var f=d.featured;
+    if(f){
+      FEAT_IMG=f.img||'';
+      var img=document.getElementById('ff-img');
+      if(f.img){img.src=f.img;img.style.display='block';}
+      document.getElementById('ff-t').textContent=(f.bhk?f.bhk+' BHK ':'')+(f.prop_type||'Home');
+      document.getElementById('ff-l').textContent=f.area||'Lucknow';
+      document.getElementById('ff-p').textContent=f.price_str||'';
+    }
+  }catch(e){}
+})();
+
+(async function(){
+  try{
+    var d=await (await fetch('/api/properties/browse?limit=6')).json();
+    var ps=(d.properties||[]).filter(function(p){return p.hero_img;}).slice(0,3);
+    if(!ps.length) ps=(d.properties||[]).slice(0,3);
+    if(!ps.length)return;
+    var g=document.getElementById('live-grid'); g.innerHTML='';
+    ps.forEach(function(p){
+      var price=(p.price_str||'POA').replace(/Rs\.\s*/,'₹');
+      var tags=(p.amenities||[]).slice(0,2).map(function(a){return '<span class="tag">'+a+'</span>';}).join('');
+      var a=document.createElement('a'); a.className='fcard reveal in'; a.href='/chat?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'');
+      a.innerHTML='<div class="fcard-img">'+(p.hero_img?'<img src="'+p.hero_img+'" alt="" onerror="this.parentElement.innerHTML=\'<div class=no>No photo yet</div>\'">':'<div class="no">No photo yet</div>')+'</div>'
+        +'<div class="fcard-b"><div class="row"><h3>'+((p.bhk||'')+' BHK '+(p.prop_type||'Home')).trim()+'</h3><span class="price">'+price+'</span></div>'
+        +'<div class="loc"><i class="ph ph-map-pin" style="font-size:15px;color:var(--emerald)"></i>'+(p.area||'Lucknow')+(p.sqft?' · '+p.sqft+' sqft':'')+'</div>'
+        +(tags?'<div class="tags">'+tags+'</div>':'')+'</div>';
+      g.appendChild(a);
+    });
+  }catch(e){}
+})();
+
+/* ── Animated "Riya at work" demo (loops) ── */
+(function(){
+  var body=document.getElementById('demo');
+  if(!body)return;
+  var reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var script=[
+    {t:'u',x:'2 BHK in Gomti Nagar, under ₹40L 🙂'},
+    {t:'typing'},
+    {t:'r',x:'Found 3 verified homes near you — here\'s a favourite:'},
+    {t:'card'},
+    {t:'u',x:'Can I visit this Saturday?'},
+    {t:'typing'},
+    {t:'r',x:'Checking with the broker…'},
+    {t:'typing'},
+    {t:'r',x:'Confirmed for Sat, 5 PM ✓ Added to your calendar.'}
+  ];
+  function bubble(cls,html){var d=document.createElement('div');d.className=cls;d.innerHTML=html;body.appendChild(d);trim();return d;}
+  function trim(){while(body.children.length>6)body.removeChild(body.firstChild);}
+  function card(){
+    var img=FEAT_IMG?'<img src="'+FEAT_IMG+'" alt="" onerror="this.style.display=\'none\'">':'';
+    return bubble('dm-card',img+'<div class="dc-b"><div class="dc-t">2 BHK · Gomtinagar Ext</div><div class="dc-p">₹36 L</div></div>');
+  }
+  function run(i){
+    if(i>=script.length){ setTimeout(function(){body.innerHTML='';run(0);}, reduce?4000:2600); return; }
+    var s=script[i];
+    if(s.t==='typing'){
+      if(reduce){run(i+1);return;}
+      var tp=bubble('dm-typing','<span></span><span></span><span></span>');
+      setTimeout(function(){tp.remove();run(i+1);},900);
+    } else if(s.t==='card'){ card(); setTimeout(function(){run(i+1);}, reduce?600:1200); }
+    else { bubble(s.t==='u'?'dm dm-u':'dm dm-r',s.x); setTimeout(function(){run(i+1);}, reduce?600:1250); }
+    body.scrollTop=body.scrollHeight;
+  }
+  run(0);
 })();
 </script>
 </body>

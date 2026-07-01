@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Broker Sign in — Riya</title>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<style>
+:root{--ink:#12211b;--paper:#f6f4ec;--emerald:#0f7a52;--emerald-dk:#0b5c3d;--line:#e3dfd2;--soft:#4a5a52;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'General Sans',system-ui,sans-serif;color:var(--ink);background:var(--ink);
+  min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;-webkit-font-smoothing:antialiased;position:relative;overflow:hidden}
+body::before{content:'';position:absolute;inset:0;background:
+  radial-gradient(circle at 18% 20%,rgba(15,122,82,.35),transparent 45%),
+  radial-gradient(circle at 85% 85%,rgba(15,122,82,.22),transparent 45%);pointer-events:none}
+.card{position:relative;width:100%;max-width:400px;background:var(--paper);border-radius:22px;
+  padding:38px 34px;box-shadow:0 30px 80px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.06)}
+.brand{display:flex;align-items:center;gap:11px;margin-bottom:26px}
+.brand .dot{width:40px;height:40px;border-radius:12px;background:var(--emerald);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-family:'Clash Display';font-weight:700;font-size:21px}
+.brand .bt{font-family:'Clash Display';font-weight:700;font-size:20px;line-height:1.1}
+.brand .bs{font-size:12px;color:var(--soft)}
+h1{font-family:'Clash Display';font-size:26px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px}
+.sub{font-size:14px;color:var(--soft);margin-bottom:24px}
+label{display:block;font-size:12.5px;font-weight:600;color:var(--soft);margin:14px 0 6px}
+.field{position:relative}
+.field i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#9aa79f;font-size:17px}
+input{width:100%;padding:12px 13px 12px 40px;border:1.5px solid var(--line);border-radius:12px;
+  font-size:15px;font-family:inherit;outline:none;background:#fff;transition:border-color .15s,box-shadow .15s}
+input:focus{border-color:var(--emerald);box-shadow:0 0 0 3px rgba(15,122,82,.14)}
+.btn{width:100%;margin-top:22px;padding:13px;border:0;border-radius:12px;background:var(--emerald);
+  color:#fff;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  box-shadow:0 8px 22px rgba(15,122,82,.3);transition:background .15s,transform .12s}
+.btn:hover{background:var(--emerald-dk);transform:translateY(-1px)}
+.btn:disabled{opacity:.7;cursor:default;transform:none}
+.msg{font-size:13px;margin-top:12px;min-height:16px;text-align:center}
+.foot{margin-top:22px;text-align:center;font-size:13px;color:var(--soft)}
+.foot a{color:var(--emerald);font-weight:600;text-decoration:none}
+</style>
+</head>
+<body>
+<form class="card" onsubmit="return signin(event)">
+  <div class="brand">
+    <span class="dot">R</span>
+    <div><div class="bt">Riya Broker</div><div class="bs">Real Estate Console</div></div>
+  </div>
+  <h1>Welcome back</h1>
+  <p class="sub">Sign in to manage your leads, listings and visits.</p>
+
+  <label for="u">Username</label>
+  <div class="field"><i class="ph ph-user"></i>
+    <input id="u" autocomplete="username" placeholder="broker" autofocus></div>
+
+  <label for="p">Password</label>
+  <div class="field"><i class="ph ph-lock-simple"></i>
+    <input id="p" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+
+  <button class="btn" id="go" type="submit"><i class="ph ph-sign-in"></i> Sign in</button>
+  <p class="msg" id="msg"></p>
+  <div class="foot"><a href="/">← Back to Riya</a></div>
+</form>
+
+<script>
+// Already signed in? go straight to the dashboard.
+if(localStorage.getItem('btok')) location.replace('/broker');
+async function signin(e){
+  e.preventDefault();
+  const u=document.getElementById('u').value.trim();
+  const p=document.getElementById('p').value;
+  const msg=document.getElementById('msg'), go=document.getElementById('go');
+  if(!u||!p){ msg.style.color='#c0492f'; msg.textContent='Enter your username and password.'; return false; }
+  go.disabled=true; msg.style.color='#4a5a52'; msg.textContent='Signing in…';
+  try{
+    const r=await fetch('/broker/auth',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:u,password:p})});
+    if(r.ok){ const d=await r.json(); localStorage.setItem('btok',d.token); location.replace('/broker'); }
+    else { go.disabled=false; msg.style.color='#c0492f'; msg.textContent='Wrong username or password.'; }
+  }catch(err){ go.disabled=false; msg.style.color='#c0492f'; msg.textContent='Could not connect. Try again.'; }
+  return false;
+}
+</script>
+</body>
+</html>

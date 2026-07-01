@@ -6,7 +6,10 @@
 <title>Riya — AI Property Consultant · Lucknow</title>
 <link rel="preconnect" href="https://api.fontshare.com">
 <link href="https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css">
 <style>
+#hdr-actions i,.pcard i,.btn-visit i,.btn-cb i,#mic-btn i{font-size:16px;vertical-align:-2px}
 :root{
   --brand:#0f7a52;--brand-dk:#0b5c3d;--brand-lt:#e7f3ec;
   --green:#0f7a52;--green-lt:#e7f3ec;
@@ -188,7 +191,7 @@ body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);hei
 <div id="sl-panel" onclick="if(event.target===this)closeShortlist()">
   <div id="sl-box">
     <div id="sl-hdr">
-      <h2>❤️ Saved Properties</h2>
+      <h2><i class="ph ph-heart" style="vertical-align:-2px"></i> Saved Properties</h2>
       <button id="sl-close" onclick="closeShortlist()">✕</button>
     </div>
     <div id="sl-cards"><p style="color:var(--slate-400);font-size:14px">Loading…</p></div>
@@ -199,7 +202,7 @@ body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);hei
 <div id="login-panel" onclick="if(event.target===this)closeLogin()">
   <div id="sl-box" style="max-width:420px">
     <div id="sl-hdr">
-      <h2>👤 Sign in</h2>
+      <h2><i class="ph ph-user-circle" style="vertical-align:-2px"></i> Sign in</h2>
       <button id="sl-close" onclick="closeLogin()">✕</button>
     </div>
     <div style="padding:18px 20px 22px">
@@ -225,7 +228,7 @@ body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);hei
 <div id="mine-panel" onclick="if(event.target===this)closeMine()">
   <div id="sl-box">
     <div id="sl-hdr">
-      <h2>🏡 My Properties</h2>
+      <h2><i class="ph ph-buildings" style="vertical-align:-2px"></i> My Properties</h2>
       <button id="sl-close" onclick="closeMine()">✕</button>
     </div>
     <div style="padding:6px 20px 4px;display:flex;justify-content:space-between;align-items:center">
@@ -244,10 +247,10 @@ body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);hei
     <div id="hdr-status">Online · Lucknow</div>
   </div>
   <div id="hdr-actions">
-    <a id="browse-btn" href="/properties/browse">🏠 Browse</a>
-    <button onclick="openShortlist()">❤️ Saved <span id="sl-badge">0</span></button>
-    <button id="mine-btn" onclick="openMine()" style="display:none">🏡 My Properties</button>
-    <button id="login-btn" onclick="openLogin()">👤 Login</button>
+    <a id="browse-btn" href="/properties/browse"><i class="ph ph-house-line"></i> Browse</a>
+    <button onclick="openShortlist()"><i class="ph ph-heart"></i> Saved <span id="sl-badge">0</span></button>
+    <button id="mine-btn" onclick="openMine()" style="display:none"><i class="ph ph-buildings"></i> My Properties</button>
+    <button id="login-btn" onclick="openLogin()"><i class="ph ph-user-circle"></i> Login</button>
   </div>
 </div>
 
@@ -257,7 +260,7 @@ body{font-family:'General Sans',system-ui,sans-serif;background:var(--paper);hei
 <!-- Input bar -->
 <div id="bar">
   <input id="inp" placeholder="Ask about properties, areas, budget…" autocomplete="off">
-  <button id="mic-btn" title="Voice input">🎤</button>
+  <button id="mic-btn" title="Voice input"><i class="ph ph-microphone"></i></button>
   <button id="send-btn" onclick="send()" title="Send">
     <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
   </button>
@@ -298,9 +301,9 @@ if (SR) {
   const rec = new SR(); rec.lang='en-IN'; rec.interimResults=false;
   rec.onresult = e => { const t=e.results[0][0].transcript; inp.value=t; voiceReply=true; resetMic(); setTimeout(()=>{ if(inp.value.trim())send(); },400); };
   rec.onerror = resetMic; rec.onend = resetMic;
-  micBtn.onclick = () => { micBtn.textContent='🔴'; micBtn.classList.add('listening'); micBtn.disabled=true; rec.start(); };
+  micBtn.onclick = () => { micBtn.innerHTML='<i class="ph-fill ph-record"></i>'; micBtn.classList.add('listening'); micBtn.disabled=true; rec.start(); };
 } else { micBtn.style.display='none'; }
-function resetMic(){ micBtn.textContent='🎤'; micBtn.classList.remove('listening'); micBtn.disabled=false; }
+function resetMic(){ micBtn.innerHTML='<i class="ph ph-microphone"></i>'; micBtn.classList.remove('listening'); micBtn.disabled=false; }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 window.addEventListener('load', () => {
@@ -436,7 +439,7 @@ function buildCard(p, num) {
 
   if (p.landmark_name && (p.landmark_distance_km||p.landmark_distance_km===0)) {
     const lm=document.createElement('div'); lm.className='pcard-landmark';
-    lm.textContent='🎯 '+p.landmark_distance_km+' km from '+p.landmark_name;
+    lm.innerHTML='<i class="ph ph-map-pin-line" style="vertical-align:-2px"></i> '+p.landmark_distance_km+' km from '+p.landmark_name;
     body.appendChild(lm);
   }
   if (p.top_amenities?.length) {
@@ -446,22 +449,22 @@ function buildCard(p, num) {
   }
   if (p.connectivity && Object.keys(p.connectivity).length) {
     const pois=document.createElement('div'); pois.className='pcard-pois';
-    Object.entries(p.connectivity).slice(0,3).forEach(([k,v])=>{ const s=document.createElement('span'); s.textContent='📍 '+k+' '+v; pois.appendChild(s); });
+    Object.entries(p.connectivity).slice(0,3).forEach(([k,v])=>{ const s=document.createElement('span'); s.innerHTML='<i class="ph ph-map-pin" style="vertical-align:-2px"></i> '+k+' '+v; pois.appendChild(s); });
     body.appendChild(pois);
   }
   const links=document.createElement('div'); links.className='pcard-links';
-  if (p.map_url) { const a=document.createElement('a'); a.href=p.map_url; a.target='_blank'; a.textContent='🗺️ Map'; links.appendChild(a); }
-  if (p.documents?.length) p.documents.forEach(d=>{ const a=document.createElement('a'); a.href=d.url; a.target='_blank'; a.textContent='📄 '+(d.label||'Doc'); links.appendChild(a); });
+  if (p.map_url) { const a=document.createElement('a'); a.href=p.map_url; a.target='_blank'; a.innerHTML='<i class="ph ph-map-trifold" style="vertical-align:-2px"></i> Map'; links.appendChild(a); }
+  if (p.documents?.length) p.documents.forEach(d=>{ const a=document.createElement('a'); a.href=d.url; a.target='_blank'; a.innerHTML='<i class="ph ph-file-text" style="vertical-align:-2px"></i> '+(d.label||'Doc'); links.appendChild(a); });
   if (links.children.length) body.appendChild(links);
 
   const actions=document.createElement('div'); actions.className='pcard-actions';
-  const vBtn=document.createElement('button'); vBtn.className='btn-visit'; vBtn.textContent='📅 Book Visit';
+  const vBtn=document.createElement('button'); vBtn.className='btn-visit'; vBtn.innerHTML='<i class="ph ph-calendar-check" style="vertical-align:-2px"></i> Book Visit';
   vBtn.onclick=()=>{ inp.value='I want to visit property '+num; send(); };
-  const cBtn=document.createElement('button'); cBtn.className='btn-cb'; cBtn.textContent='📞 Callback';
+  const cBtn=document.createElement('button'); cBtn.className='btn-cb'; cBtn.innerHTML='<i class="ph ph-phone-call" style="vertical-align:-2px"></i> Callback';
   cBtn.onclick=()=>{ inp.value='Please call me back about property '+num; send(); };
   const isSaved=savedIds.has(p.id);
   const sBtn=document.createElement('button'); sBtn.className='btn-save'+(isSaved?' saved':'');
-  sBtn.textContent=isSaved?'❤️':'🤍'; sBtn.title=isSaved?'Saved':'Save';
+  sBtn.innerHTML=isSaved?'<i class="ph-fill ph-heart"></i>':'<i class="ph ph-heart"></i>'; sBtn.title=isSaved?'Saved':'Save';
   sBtn.onclick=()=>toggleSave(p.id, sBtn);
   actions.appendChild(vBtn); actions.appendChild(cBtn); actions.appendChild(sBtn);
   body.appendChild(actions); card.appendChild(body);
@@ -475,7 +478,7 @@ async function toggleSave(id, btn) {
     await fetch('/shortlist',{method:had?'DELETE':'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_id:SID,property_id:id})});
     had ? savedIds.delete(id) : savedIds.add(id);
-    btn.textContent = savedIds.has(id)?'❤️':'🤍';
+    btn.innerHTML = savedIds.has(id)?'<i class="ph-fill ph-heart"></i>':'<i class="ph ph-heart"></i>';
     btn.classList.toggle('saved', savedIds.has(id));
     localStorage.setItem('riya_saved', JSON.stringify([...savedIds]));
     updateBadge();
@@ -489,7 +492,7 @@ async function openShortlist() {
   try {
     const res=await fetch('/shortlist/'+SID); const data=await res.json();
     c.innerHTML='';
-    if (!data.properties?.length) { c.innerHTML='<p style="color:#94a3b8;font-size:14px;text-align:center;padding:30px">No saved properties yet.<br>Tap 🤍 on any card to save.</p>'; return; }
+    if (!data.properties?.length) { c.innerHTML='<p style="color:#94a3b8;font-size:14px;text-align:center;padding:30px">No saved properties yet.<br>Tap the heart on any card to save.</p>'; return; }
     data.properties.forEach((p,i)=>c.appendChild(buildCard(p,i+1)));
   } catch(e){ c.innerHTML='<p style="color:#dc2626;font-size:13px">Could not load.</p>'; }
 }
@@ -542,7 +545,7 @@ async function onLoggedIn(token){
   document.getElementById('otp-row').style.display='none'; document.getElementById('login-action').textContent='Send code'; document.getElementById('login-msg').textContent='';
   closeLogin(); await refreshAuthUI();
   for(const id of savedIds){ try{ await fetch('/me/favourites',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({property_id:id})}); }catch(e){} }
-  addBubble('You\'re signed in'+(CUST&&CUST.name?', '+CUST.name.split(' ')[0]:'')+'! 🎉 Your favourites and visits are saved to your account now.', 'riya');
+  addBubble('You\'re signed in'+(CUST&&CUST.name?', '+CUST.name.split(' ')[0]:'')+'! Your favourites and visits are saved to your account now.', 'riya');
 }
 function logout(){ TOKEN=''; localStorage.removeItem('riya_token'); closeMine(); refreshAuthUI(); }
 async function initGoogle(){
@@ -566,15 +569,15 @@ async function openMine(){
     c.innerHTML='';
     if(d.visits && d.visits.length){
       const v=document.createElement('div'); v.style.marginBottom='16px';
-      v.innerHTML='<h3 style="font-size:15px;margin:4px 0 8px;color:#0f172a">📅 Your visits</h3>'+
-        d.visits.map(x=>{ const dt=x.scheduled_at?new Date(x.scheduled_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'time TBD'; return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:6px;font-size:14px">🏠 <b>'+dt+'</b> — <span style="text-transform:capitalize;color:#64748b">'+(x.status||'')+'</span></div>'; }).join('');
+      v.innerHTML='<h3 style="font-size:15px;margin:4px 0 8px;color:var(--slate-900)"><i class="ph ph-calendar-check" style="vertical-align:-2px"></i> Your visits</h3>'+
+        d.visits.map(x=>{ const dt=x.scheduled_at?new Date(x.scheduled_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'time TBD'; return '<div style="background:#fff;border:1px solid var(--slate-200);border-radius:10px;padding:10px 12px;margin-bottom:6px;font-size:14px"><i class="ph ph-house-line" style="vertical-align:-2px"></i> <b>'+dt+'</b> — <span style="text-transform:capitalize;color:#64748b">'+(x.status||'')+'</span></div>'; }).join('');
       c.appendChild(v);
     }
-    const h=document.createElement('h3'); h.style.cssText='font-size:15px;margin:4px 0 8px;color:#0f172a'; h.textContent='❤️ Your favourites'; c.appendChild(h);
-    if(!d.favourites || !d.favourites.length){ const p=document.createElement('p'); p.style.cssText='color:#94a3b8;font-size:14px'; p.textContent='No favourites yet — tap 🤍 on a property, or ask Riya to “save the 2nd one”.'; c.appendChild(p); }
+    const h=document.createElement('h3'); h.style.cssText='font-size:15px;margin:4px 0 8px;color:#0f172a'; h.innerHTML='<i class="ph ph-heart" style="vertical-align:-2px"></i> Your favourites'; c.appendChild(h);
+    if(!d.favourites || !d.favourites.length){ const p=document.createElement('p'); p.style.cssText='color:#94a3b8;font-size:14px'; p.textContent='No favourites yet — tap the heart on a property, or ask Riya to “save the 2nd one”.'; c.appendChild(p); }
     else {
-      if(d.favourites.length>1){ const cmp=document.createElement('button'); cmp.textContent='⚖️ Compare my favourites'; cmp.style.cssText='width:100%;padding:10px;border:0;border-radius:10px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;margin-bottom:12px'; cmp.onclick=()=>{ closeMine(); inp.value='compare my saved properties'; send(); }; c.appendChild(cmp); }
-      d.favourites.forEach((p,i)=>{ c.appendChild(buildCard(p,i+1)); const ask=document.createElement('button'); ask.textContent='💬 Ask Riya about this'; ask.style.cssText='width:100%;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#334155;font-weight:500;cursor:pointer;margin:-6px 0 14px'; ask.onclick=()=>{ closeMine(); inp.value='tell me about the '+(p.bhk?p.bhk+' BHK ':'')+(p.property_type||'property')+' in '+(p.area||''); send(); }; c.appendChild(ask); });
+      if(d.favourites.length>1){ const cmp=document.createElement('button'); cmp.innerHTML='<i class="ph ph-scales" style="vertical-align:-2px"></i> Compare my favourites'; cmp.style.cssText='width:100%;padding:10px;border:0;border-radius:10px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;margin-bottom:12px'; cmp.onclick=()=>{ closeMine(); inp.value='compare my saved properties'; send(); }; c.appendChild(cmp); }
+      d.favourites.forEach((p,i)=>{ c.appendChild(buildCard(p,i+1)); const ask=document.createElement('button'); ask.innerHTML='<i class="ph ph-chat-circle-dots" style="vertical-align:-2px"></i> Ask Riya about this'; ask.style.cssText='width:100%;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#334155;font-weight:500;cursor:pointer;margin:-6px 0 14px'; ask.onclick=()=>{ closeMine(); inp.value='tell me about the '+(p.bhk?p.bhk+' BHK ':'')+(p.property_type||'property')+' in '+(p.area||''); send(); }; c.appendChild(ask); });
     }
   }catch(e){ c.innerHTML='<p style="color:#dc2626;font-size:13px">Could not load your properties.</p>'; }
 }

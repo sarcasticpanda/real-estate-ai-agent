@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Browse Properties — Riya Lucknow</title>
 <link href="/static/shared.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
 <style>
+.topnav-links i,.btn-ask i,.pcard-pois i{font-size:16px;vertical-align:-2px}
 .hero{background:var(--slate-900);color:var(--paper);padding:48px 20px 40px;text-align:center;position:relative;overflow:hidden}
 .hero::after{content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 0%,rgba(15,122,82,.35),transparent 55%);pointer-events:none}
 .hero h1{font-family:var(--display);font-size:clamp(26px,4vw,40px);font-weight:700;margin-bottom:8px;letter-spacing:-.02em;position:relative}
@@ -70,9 +72,9 @@
 <nav class="topnav">
   <a class="topnav-brand" href="/">Riya</a>
   <div class="topnav-links">
-    <a href="/chat">💬 <span>Chat</span></a>
-    <a href="/properties/browse" class="active">🏠 <span>Browse</span></a>
-    <a href="/broker">🔑 <span>Broker</span></a>
+    <a href="/chat"><i class="ph ph-chat-circle-dots"></i> <span>Chat</span></a>
+    <a href="/properties/browse" class="active"><i class="ph ph-house-line"></i> <span>Browse</span></a>
+    <a href="/broker/login"><i class="ph ph-key"></i> <span>Broker</span></a>
   </div>
 </nav>
 
@@ -111,14 +113,14 @@ async function load(){
   document.getElementById('count').textContent=ps.length+' propert'+(ps.length===1?'y':'ies')+' found';
   const g=document.getElementById('grid');
   if(!ps.length){
-    g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><div class="ei">🏠</div><h2>No properties found</h2><p>Try different filters, or <a href="/chat">chat with Riya</a> for personalised recommendations.</p></div>';
+    g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><div class="ei"><i class="ph ph-house-line"></i></div><h2>No properties found</h2><p>Try different filters, or <a href="/chat">chat with Riya</a> for personalised recommendations.</p></div>';
     return;
   }
   g.innerHTML='';
   ps.forEach(p=>{
     const c=document.createElement('div'); c.className='pcard';
     const chips=(p.amenities||[]).map(a=>'<span class="pchip">'+a+'</span>').join('');
-    const poi=p.metro?'<span>🚇 Metro '+p.metro+' km</span>':'';
+    const poi=p.metro?'<span><i class="ph ph-train-simple"></i> Metro '+p.metro+' km</span>':'';
     c.innerHTML='<div class="pcard-img">'
       +(p.hero_img?'<img src="'+p.hero_img+'" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=pcard-img-empty>No photo</div>\'">'
                   :'<div class="pcard-img-empty">No photo yet</div>')
@@ -130,7 +132,7 @@ async function load(){
       +(chips?'<div class="pcard-chips">'+chips+'</div>':'')
       +(poi?'<div class="pcard-pois">'+poi+'</div>':'')
       +'<div class="pcard-actions">'
-      +'<a class="btn-ask" href="/chat?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'')+'">💬 Ask Riya about this</a>'
+      +'<a class="btn-ask" href="/chat?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'')+'"><i class="ph ph-chat-circle-dots"></i> Ask Riya about this</a>'
       +'</div>'
       +'</div>';
     g.appendChild(c);

@@ -5,32 +5,39 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{TITLE}} — Riya Broker</title>
 <link href="/static/shared.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css">
 <style>
 /* ── Broker shell ── */
 .shell{display:flex;min-height:100vh}
 .sidebar{
-  width:220px;flex-shrink:0;background:var(--slate-900);color:#c7d2cb;
+  width:224px;flex-shrink:0;background:var(--slate-900);color:#c7d2cb;
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto
 }
-.sb-brand{padding:20px 16px 12px;border-bottom:1px solid rgba(255,255,255,.08)}
-.sb-brand-name{font-family:var(--display);font-size:19px;font-weight:700;color:#fff;letter-spacing:-.01em}
-.sb-brand-sub{font-size:11px;color:#7f8f86;margin-top:2px}
-.sb-tok{padding:10px 14px;background:rgba(255,255,255,.06);margin:10px 10px 0;
-  border-radius:8px;display:flex;align-items:center;gap:8px}
-.sb-tok input{background:transparent;border:none;color:#94a3b8;font-size:12px;
-  width:100%;outline:none;font-family:inherit}
-.sb-tok-icon{font-size:14px;flex-shrink:0}
+.sb-brand{padding:20px 16px 14px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:10px}
+.sb-brand .sb-dot{width:34px;height:34px;border-radius:10px;background:var(--brand);color:#fff;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-family:var(--display);font-weight:700;font-size:18px}
+.sb-brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:#fff;letter-spacing:-.01em;line-height:1.1}
+.sb-brand-sub{font-size:11px;color:#7f8f86;margin-top:1px}
+.sb-user{margin:12px 10px 0;padding:10px 12px;background:rgba(255,255,255,.06);
+  border-radius:10px;display:flex;align-items:center;gap:9px}
+.sb-user i{font-size:18px;color:#7fdcae;flex-shrink:0}
+.sb-user .su-t{flex:1;min-width:0}
+.sb-user .su-name{font-size:13px;font-weight:600;color:#e2e8f0}
+.sb-user .su-role{font-size:11px;color:#7f8f86}
+.sb-user .su-out{background:none;border:none;color:#9aa79f;cursor:pointer;font-size:17px;
+  display:flex;align-items:center;padding:4px;border-radius:6px;transition:all .12s}
+.sb-user .su-out:hover{color:#fff;background:rgba(255,255,255,.08)}
 .sb-nav{padding:10px 0;flex:1}
-.sb-section{font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;
-  letter-spacing:.08em;padding:12px 16px 4px}
-.sb-link{display:flex;align-items:center;gap:10px;padding:9px 16px;font-size:13px;
-  font-weight:500;color:#94a3b8;text-decoration:none;transition:all .12s;border-left:3px solid transparent}
+.sb-section{font-size:10px;font-weight:700;color:#5c6b62;text-transform:uppercase;
+  letter-spacing:.08em;padding:14px 16px 4px}
+.sb-link{display:flex;align-items:center;gap:11px;padding:10px 16px;font-size:13px;
+  font-weight:500;color:#9aa79f;text-decoration:none;transition:all .12s;border-left:3px solid transparent}
 .sb-link:hover{background:rgba(255,255,255,.06);color:#e2e8f0}
 .sb-link.active{background:rgba(15,122,82,.22);color:#7fdcae;border-left-color:var(--brand);font-weight:600}
-.sb-link .ic{width:16px;text-align:center;flex-shrink:0;font-size:14px}
-.sb-footer{padding:14px 16px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:#475569}
-.sb-footer a{color:#475569;text-decoration:none}
-.sb-footer a:hover{color:#94a3b8}
+.sb-link .ic{width:18px;text-align:center;flex-shrink:0;font-size:17px;line-height:1}
+.sb-footer{padding:14px 16px;border-top:1px solid rgba(255,255,255,.06);font-size:11px;color:#5c6b62}
+.sb-footer a{color:#5c6b62;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.sb-footer a:hover{color:#9aa79f}
 
 /* ── Main content ── */
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -61,37 +68,39 @@
 <div class="shell">
   <nav class="sidebar" id="sidebar">
     <div class="sb-brand">
-      <div class="sb-brand-name">Riya Broker</div>
-      <div class="sb-brand-sub">Real Estate Management</div>
+      <div class="sb-dot">R</div>
+      <div><div class="sb-brand-name">Riya Broker</div>
+      <div class="sb-brand-sub">Real Estate Console</div></div>
     </div>
-    <div class="sb-tok">
-      <span class="sb-tok-icon">🔑</span>
-      <input id="tok-input" type="password" placeholder="Enter broker token" oninput="saveTok(this.value)">
+    <div class="sb-user">
+      <i class="ph ph-user-circle"></i>
+      <div class="su-t"><div class="su-name">Broker</div><div class="su-role">Signed in</div></div>
+      <button class="su-out" title="Log out" onclick="logoutBroker()"><i class="ph ph-sign-out"></i></button>
     </div>
     <div class="sb-nav">
       <div class="sb-section">Overview</div>
-      <a class="sb-link {{A_DASH}}" href="/broker"><span class="ic">📊</span> Dashboard</a>
-      <a class="sb-link {{A_PIPE}}" href="/broker/pipeline"><span class="ic">🎯</span> Pipeline</a>
-      <a class="sb-link {{A_ANAL}}" href="/broker/analytics/visual"><span class="ic">📈</span> Analytics</a>
+      <a class="sb-link {{A_DASH}}" href="/broker"><i class="ic ph ph-gauge"></i> Dashboard</a>
+      <a class="sb-link {{A_PIPE}}" href="/broker/pipeline"><i class="ic ph ph-funnel"></i> Pipeline</a>
+      <a class="sb-link {{A_ANAL}}" href="/broker/analytics/visual"><i class="ic ph ph-chart-line-up"></i> Analytics</a>
       <div class="sb-section">Visits & Calendar</div>
-      <a class="sb-link {{A_MEET}}" href="/broker/meetings"><span class="ic">📅</span> Meetings</a>
-      <a class="sb-link" href="https://calendar.google.com" target="_blank"><span class="ic">🗓️</span> Google Calendar ↗</a>
+      <a class="sb-link {{A_MEET}}" href="/broker/meetings"><i class="ic ph ph-calendar-check"></i> Meetings</a>
+      <a class="sb-link" href="https://calendar.google.com" target="_blank"><i class="ic ph ph-calendar-dots"></i> Google Calendar</a>
       <div class="sb-section">Properties</div>
-      <a class="sb-link {{A_LIST}}" href="/broker/listings"><span class="ic">🏠</span> My Listings</a>
-      <a class="sb-link {{A_ADD}}" href="/broker/add"><span class="ic">➕</span> Add Property</a>
-      <a class="sb-link {{A_UPL}}" href="/broker/upload"><span class="ic">📤</span> Upload CSV</a>
+      <a class="sb-link {{A_LIST}}" href="/broker/listings"><i class="ic ph ph-house-line"></i> My Listings</a>
+      <a class="sb-link {{A_ADD}}" href="/broker/add"><i class="ic ph ph-plus-circle"></i> Add Property</a>
+      <a class="sb-link {{A_UPL}}" href="/broker/upload"><i class="ic ph ph-upload-simple"></i> Upload CSV</a>
       <div class="sb-section">Buyers</div>
-      <a class="sb-link" href="/properties/browse" target="_blank"><span class="ic">👁️</span> Customer View</a>
-      <a class="sb-link" href="/chat"><span class="ic">💬</span> Chat Preview</a>
+      <a class="sb-link" href="/properties/browse" target="_blank"><i class="ic ph ph-eye"></i> Customer View</a>
+      <a class="sb-link" href="/chat"><i class="ic ph ph-chat-circle-dots"></i> Chat Preview</a>
     </div>
     <div class="sb-footer">
-      <a href="/health" target="_blank">🟢 Server status</a>
+      <a href="/health" target="_blank"><i class="ph ph-circle-fill" style="color:#3fb984;font-size:9px"></i> Server status</a>
     </div>
   </nav>
 
   <div class="main">
     <div class="main-hdr">
-      <button class="btn btn-ghost" style="display:none;padding:6px 10px" id="mob-menu" onclick="openSb()">☰</button>
+      <button class="btn btn-ghost" style="display:none;padding:6px 10px" id="mob-menu" onclick="openSb()"><i class="ph ph-list"></i></button>
       <div class="main-title">{{TITLE}}</div>
       <div id="hdr-extra">{{HDR_EXTRA}}</div>
     </div>
@@ -101,16 +110,17 @@
   </div>
 </div>
 
-<button class="mob-toggle" onclick="openSb()">☰</button>
+<button class="mob-toggle" onclick="openSb()"><i class="ph ph-list"></i></button>
 
 <div id="toast"></div>
 
 <script>
-// Shared token handling
+// Shared token handling — gate the whole console behind the broker login page.
 function tok(){return localStorage.getItem('btok')||'';}
 function saveTok(v){if(v)localStorage.setItem('btok',v);}
+function logoutBroker(){localStorage.removeItem('btok');location.replace('/broker/login');}
 window.addEventListener('DOMContentLoaded',()=>{
-  const t=tok(); if(t)document.getElementById('tok-input').value=t;
+  if(!tok()){location.replace('/broker/login');return;}
   // mobile menu button
   if(window.innerWidth<=768)document.getElementById('mob-menu').style.display='flex';
 });
