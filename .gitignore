@@ -30,3 +30,12 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Secrets / credentials
+service_account.json
+client_secret*.json
+
+# Test / tooling artifacts
+.playwright-mcp/
+*.png
+scratchpad/
