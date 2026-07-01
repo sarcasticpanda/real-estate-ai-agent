@@ -603,6 +603,67 @@ async def broker_reschedule_meeting(meeting_id: str, req: dict):
     return {"ok": True, "new_time": when}
 
 
+@app.post("/broker/meetings/{meeting_id}/confirm")
+async def broker_confirm_meeting(meeting_id: str, req: dict):
+    """Broker confirms a visit from the dashboard — mirrors the WhatsApp YES."""
+    _check_broker_token(req.get("token", ""))
+    from datetime import datetime
+    from database.supabase_client import update_meeting, get_client, update_lead
+    from notifications.whatsapp_notifier import _send
+    from agent.property_agent import _send_visit_confirmation_email, _gcal_link, _fmt_visit
+    cl = get_client()
+    rows = cl.table("meetings").select("*").eq("id", meeting_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    m = rows[0]
+    update_meeting(meeting_id, {"status": "confirmed"})
+    dt, when = None, "your visit"
+    if m.get("scheduled_at"):
+        try:
+            dt = datetime.fromisoformat(m["scheduled_at"]); when = _fmt_visit(dt)
+        except Exception:
+            pass
+    if dt:
+        try:
+            from notifications.calendar_client import add_event_to_broker_calendar
+            add_event_to_broker_calendar(dt, summary="Property visit",
+                                         description="Confirmed via broker dashboard", duration_minutes=60)
+        except Exception as e:
+            logger.debug(f"calendar add on web-confirm skipped: {e}")
+    if m.get("lead_id"):
+        lead = cl.table("leads").select("name,phone,email").eq("id", m["lead_id"]).limit(1).execute().data
+        if lead:
+            l = lead[0]
+            if l.get("phone"):
+                _send(l["phone"], f"Great news, {l.get('name','')}! Your visit on *{when}* is confirmed. See you then! 🎉")
+            if l.get("email") and dt:
+                gcal = _gcal_link(dt, "Property visit", f"Confirmed for {when}", "Lucknow")
+                _send_visit_confirmation_email(l["email"], l.get("name", ""), when, "Lucknow", gcal, dt)
+        update_lead(m["lead_id"], {"status": "visit"})
+    return {"ok": True, "when": when}
+
+
+@app.post("/broker/meetings/{meeting_id}/decline")
+async def broker_decline_meeting(meeting_id: str, req: dict):
+    """Broker declines a visit from the dashboard — mirrors the WhatsApp NO."""
+    _check_broker_token(req.get("token", ""))
+    from database.supabase_client import update_meeting, get_client
+    from notifications.whatsapp_notifier import _send
+    cl = get_client()
+    rows = cl.table("meetings").select("*").eq("id", meeting_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    m = rows[0]
+    update_meeting(meeting_id, {"status": "cancelled", "notes": "Declined by broker via dashboard"})
+    if m.get("lead_id"):
+        lead = cl.table("leads").select("name,phone").eq("id", m["lead_id"]).limit(1).execute().data
+        if lead and lead[0].get("phone"):
+            _send(lead[0]["phone"],
+                  f"Hi {lead[0].get('name','')}, our consultant isn't free at that time. "
+                  "Could you suggest another day/time? I'll check availability right away.")
+    return {"ok": True}
+
+
 @app.get("/api/broker/calendar/busy")
 async def broker_calendar_busy(token: str, days: int = 7):
     """Return broker's Google Calendar busy slots for the next N days."""
@@ -640,19 +701,33 @@ async function load(){
   document.getElementById('count').textContent=ms.length+' meetings';
   if(!ms.length){document.getElementById('mtgs').innerHTML='<div class="empty"><div class="empty-icon">📅</div><p>No meetings yet.</p></div>';return;}
   const STATUS_COLOR={'confirmed':'badge-won','pending':'badge-new','rescheduled':'badge-visit','cancelled':'badge-lost'};
-  document.getElementById('mtgs').innerHTML='<div class="card"><table class="table"><thead><tr><th>Buyer</th><th>Phone</th><th>Area</th><th>Scheduled</th><th>Status</th><th>Reschedule</th></tr></thead><tbody>'
+  document.getElementById('mtgs').innerHTML='<div class="card"><table class="table"><thead><tr><th>Buyer</th><th>Phone</th><th>Area</th><th>Scheduled</th><th>Status</th><th>Actions</th></tr></thead><tbody>'
     +ms.map(m=>{
       const dt=m.scheduled_at?new Date(m.scheduled_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'—';
       const phone=(m.buyer_phone||'').replace(/[^0-9]/g,'');
+      const bs='font-size:11px;padding:4px 9px;border:0;border-radius:8px;cursor:pointer;margin-right:4px';
+      const pending=(m.status==='pending'||m.status==='rescheduled');
+      const actions=(pending?`<button style="${bs};background:#16a34a;color:#fff" onclick="confirmMtg('${m.id}')">✓ Confirm</button><button style="${bs};background:#ef4444;color:#fff" onclick="declineMtg('${m.id}')">✕ Decline</button>`:'')
+        +`<button class="btn btn-ghost" style="font-size:11px;padding:4px 9px" onclick="reschedule('${m.id}')">Reschedule</button>`;
       return `<tr>
         <td><b>${m.buyer_name||'Unknown'}</b></td>
         <td><a href="https://wa.me/91${phone}" target="_blank" style="color:#059669;font-weight:600">${m.buyer_phone||'—'}</a></td>
         <td>${m.buyer_area||'—'}</td>
         <td>${dt}</td>
         <td><span class="badge ${STATUS_COLOR[m.status]||'badge-wait'}">${m.status}</span></td>
-        <td><button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="reschedule('${m.id}')">Reschedule</button></td>
+        <td>${actions}</td>
       </tr>`;
     }).join('')+'</tbody></table></div>';
+}
+async function confirmMtg(id){
+  if(!confirm('Confirm this visit? The buyer will be notified and it will be added to your calendar.'))return;
+  const r=await fetch('/broker/meetings/'+id+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});
+  const d=await r.json(); if(d.ok){toast('Confirmed'+(d.when?' for '+d.when:'')+' — buyer notified ✅');load();} else toast('Error: '+(d.detail||'unknown'),'false');
+}
+async function declineMtg(id){
+  if(!confirm('Decline this visit? The buyer will be asked to pick another time.'))return;
+  const r=await fetch('/broker/meetings/'+id+'/decline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});
+  const d=await r.json(); if(d.ok){toast('Declined — buyer asked to reschedule');load();} else toast('Error: '+(d.detail||'unknown'),'false');
 }
 async function reschedule(id){
   const t=prompt('Enter new date and time (e.g. "Saturday 5pm" or "25 Jun at 4pm"):');
