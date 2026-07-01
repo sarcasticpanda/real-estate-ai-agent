@@ -1516,14 +1516,28 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
 
 def _send_visit_confirmation_email(email: str, name: str, when: str, area: str, gcal: str | None, dt=None) -> None:
     try:
-        from notifications.email_notifier import _send, send_calendar_invite
-        cal = f'<p>📅 <a href="{gcal}">Add to your calendar</a></p>' if gcal else ""
-        html = (f"<p>Hi {name},</p><p>Your property visit is confirmed for <b>{when}</b> in {area}. "
-                f"Our consultant will call you shortly to finalise it.</p>{cal}"
-                f"<p>The calendar invite is attached — just open it to add the visit to your calendar.</p>"
-                f"<p>— Riya, your property assistant</p>")
+        from notifications.email_notifier import (
+            _send, send_calendar_invite, action_bar, action_button, wa_link, PUBLIC_BASE_URL,
+        )
+        buttons = []
+        if gcal:
+            buttons.append(action_button("📅 Add to calendar", gcal, "#0f9d58"))
+        buttons.append(action_button("🔄 Reschedule on WhatsApp",
+                                     wa_link(f"Hi, I'd like to reschedule my visit ({when})"), "#25d366"))
+        buttons.append(action_button("💬 Chat with Riya", PUBLIC_BASE_URL, "#2563eb"))
+        bar = action_bar(*buttons)
+        html = (f"<div style='font-family:sans-serif;max-width:560px;margin:auto;color:#0f172a'>"
+                f"<p>Hi {name},</p>"
+                f"<p>Your property visit is confirmed for <b>{when}</b> in {area}. "
+                f"Our consultant will reach out to finalise it.</p>"
+                f"{bar}"
+                f"<p style='color:#64748b;font-size:13px'>Need a different time? Tap "
+                f"<b>Reschedule on WhatsApp</b> above, or just reply here — we'll sort it.</p>"
+                f"<p>— Riya, your property assistant 🏠</p></div>")
         plain = (f"Hi {name},\n\nYour property visit is confirmed for {when} in {area}. "
-                 f"Our consultant will call you shortly.\n"
+                 f"Our consultant will reach out to finalise it.\n"
+                 f"Reschedule on WhatsApp: {wa_link('Reschedule my visit')}\n"
+                 f"Chat with Riya: {PUBLIC_BASE_URL}\n"
                  f"{('Add to calendar: ' + gcal) if gcal else ''}\n\n— Riya")
         subject = f"Your property visit — {when}"
         if dt:

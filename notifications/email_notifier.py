@@ -27,6 +27,26 @@ logger = logging.getLogger(__name__)
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://144-24-156-187.sslip.io")
+# The WhatsApp business number buyers can message (digits only, with country code).
+WHATSAPP_BUSINESS_NUMBER = os.environ.get("WHATSAPP_BUSINESS_NUMBER", "15556534003")
+
+
+def action_button(label: str, url: str, color: str = "#2563eb") -> str:
+    """A styled button-link for emails (recipients can actually DO something)."""
+    return (f'<a href="{url}" style="display:inline-block;margin:5px 6px;background:{color};'
+            f'color:#fff;padding:11px 18px;border-radius:10px;text-decoration:none;'
+            f'font-size:14px;font-weight:600">{label}</a>')
+
+
+def action_bar(*buttons: str) -> str:
+    return '<div style="text-align:center;margin:22px 0 6px">' + "".join(buttons) + '</div>'
+
+
+def wa_link(text: str, number: str = WHATSAPP_BUSINESS_NUMBER) -> str:
+    import urllib.parse
+    return f"https://wa.me/{number}?text={urllib.parse.quote(text)}"
+
 
 def _get_credentials() -> tuple[str, str] | tuple[None, None]:
     addr = os.environ.get("GMAIL_ADDRESS")
@@ -148,9 +168,14 @@ This lead was captured via the Real Estate AI Agent chat.
         <td style="padding:8px 0"><span style="background:#34a853;color:white;padding:3px 10px;border-radius:12px;font-size:13px">NEW</span></td></tr>
   </table>
   <div style="margin-top:20px;padding:16px;background:#fff3cd;border-radius:6px;border-left:4px solid #ffc107">
-    <strong>Action required:</strong> Please call {name} at <strong>{phone}</strong> within 2 hours to arrange a site visit.
+    <strong>Action required:</strong> Please reach {name} within 2 hours to arrange a site visit.
   </div>
-  <p style="color:#999;font-size:12px;margin-top:24px">Sent by Real Estate AI Agent — automated lead capture</p>
+  {action_bar(
+      action_button("💬 WhatsApp " + name, "https://wa.me/91" + "".join(ch for ch in phone if ch.isdigit())[-10:], "#25d366"),
+      action_button("📞 Call", "tel:" + phone, "#0f9d58"),
+      action_button("📊 Open dashboard", PUBLIC_BASE_URL + "/broker", "#2563eb"),
+  )}
+  <p style="color:#999;font-size:12px;margin-top:24px">Sent by Riya — automated lead capture</p>
 </div>
 </body></html>"""
 

@@ -201,16 +201,26 @@ def ask_broker_availability(
         broker = get_broker_by_phone(broker_phone) or {}
         bemail = broker.get("email")
         if bemail:
-            from notifications.email_notifier import _send as _email_send
+            from notifications.email_notifier import (
+                _send as _email_send, action_bar, action_button, PUBLIC_BASE_URL,
+            )
+            bdigits = "".join(ch for ch in (buyer_phone or "") if ch.isdigit())[-10:]
+            bar = action_bar(
+                action_button(f"💬 WhatsApp {buyer_name}", f"https://wa.me/91{bdigits}", "#25d366"),
+                action_button("📊 Manage on dashboard", f"{PUBLIC_BASE_URL}/broker/meetings", "#2563eb"),
+            )
             subj = f"Visit request: {buyer_name} — {proposed_when}"
-            html = (f"<p><b>New visit request</b></p>"
+            html = (f"<div style='font-family:sans-serif;max-width:560px;margin:auto;color:#0f172a'>"
+                    f"<p><b>New visit request</b></p>"
                     f"<p><b>{buyer_name}</b> wants to visit <i>{prop_label}</i><br>"
                     f"📅 <b>{proposed_when}</b><br>📞 {buyer_phone}</p>"
-                    f"<p>{day_note}</p>"
-                    f"<p>Reply on WhatsApp: <b>YES</b> to confirm, <b>NO</b> if busy, or send a better time.</p>")
+                    f"<p style='color:#64748b'>{day_note}</p>"
+                    f"<p>Reply on WhatsApp: <b>YES</b> to confirm, <b>NO</b> if busy, or send a better time.</p>"
+                    f"{bar}</div>")
             plain = (f"New visit request\n\n{buyer_name} wants to visit {prop_label}\n"
                      f"{proposed_when}\nBuyer: {buyer_phone}\n{day_note}\n\n"
-                     f"Reply on WhatsApp: YES / NO / a better time.")
+                     f"Reply on WhatsApp: YES / NO / a better time.\n"
+                     f"Dashboard: {PUBLIC_BASE_URL}/broker/meetings")
             _email_send(bemail, subj, html, plain)
     except Exception as e:
         logger.debug(f"broker availability email skipped: {e}")
