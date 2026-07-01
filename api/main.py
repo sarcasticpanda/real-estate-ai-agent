@@ -212,6 +212,12 @@ def _current_customer(authorization: str) -> dict | None:
     return get_customer(claims.get("sub"))
 
 
+@app.get("/auth/config")
+async def auth_config():
+    """Public client-side config (the Google Client ID is not a secret)."""
+    return {"google_client_id": os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")}
+
+
 @app.post("/auth/otp/request")
 async def auth_otp_request(req: OtpRequest):
     from api.auth import request_otp

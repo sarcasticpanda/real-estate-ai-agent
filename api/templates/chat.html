@@ -152,8 +152,9 @@ body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;d
   display:flex;align-items:center;justify-content:center}
 
 /* ── Shortlist panel ── */
-#sl-panel{display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:500;
+#sl-panel,#login-panel,#mine-panel{display:none;position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:500;
   align-items:flex-end;justify-content:center;backdrop-filter:blur(2px)}
+#hdr-actions button, #hdr-actions a{cursor:pointer}
 #sl-box{background:var(--slate-50);border-radius:20px 20px 0 0;max-width:520px;width:100%;
   max-height:90vh;overflow-y:auto;padding:20px}
 #sl-box h2{font-size:18px;font-weight:700;margin-bottom:14px;color:var(--slate-900)}
@@ -169,6 +170,7 @@ body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;d
   #hdr-actions a:not(#browse-btn){display:none}
 }
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -189,6 +191,47 @@ body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;d
   </div>
 </div>
 
+<!-- Login modal -->
+<div id="login-panel" onclick="if(event.target===this)closeLogin()">
+  <div id="sl-box" style="max-width:420px">
+    <div id="sl-hdr">
+      <h2>👤 Sign in</h2>
+      <button id="sl-close" onclick="closeLogin()">✕</button>
+    </div>
+    <div style="padding:18px 20px 22px">
+      <p style="color:var(--slate-400);font-size:14px;margin:0 0 14px">Sign in to save your favourite properties and see your booked visits — on any device.</p>
+      <div id="gbtn" style="display:flex;justify-content:center;margin-bottom:14px"></div>
+      <div style="display:flex;align-items:center;gap:10px;color:var(--slate-400);font-size:12px;margin:6px 0 14px">
+        <div style="flex:1;height:1px;background:#e2e8f0"></div> or email <div style="flex:1;height:1px;background:#e2e8f0"></div>
+      </div>
+      <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email"
+             style="width:100%;padding:11px 13px;border:1px solid #cbd5e1;border-radius:10px;font-size:15px;margin-bottom:10px;box-sizing:border-box">
+      <div id="otp-row" style="display:none">
+        <input id="login-otp" inputmode="numeric" maxlength="6" placeholder="6-digit code"
+               style="width:100%;padding:11px 13px;border:1px solid #cbd5e1;border-radius:10px;font-size:18px;letter-spacing:6px;text-align:center;margin-bottom:10px;box-sizing:border-box">
+      </div>
+      <button id="login-action" onclick="loginAction()"
+              style="width:100%;padding:12px;border:0;border-radius:10px;background:var(--brand,#2563eb);color:#fff;font-size:15px;font-weight:600;cursor:pointer">Send code</button>
+      <p id="login-msg" style="font-size:13px;margin:10px 0 0;min-height:16px"></p>
+    </div>
+  </div>
+</div>
+
+<!-- My Properties modal -->
+<div id="mine-panel" onclick="if(event.target===this)closeMine()">
+  <div id="sl-box">
+    <div id="sl-hdr">
+      <h2>🏡 My Properties</h2>
+      <button id="sl-close" onclick="closeMine()">✕</button>
+    </div>
+    <div style="padding:6px 20px 4px;display:flex;justify-content:space-between;align-items:center">
+      <span id="mine-who" style="color:var(--slate-400);font-size:13px"></span>
+      <button onclick="logout()" style="background:none;border:0;color:#ef4444;font-size:13px;cursor:pointer">Log out</button>
+    </div>
+    <div id="mine-cards" style="padding:6px 20px 20px"><p style="color:var(--slate-400);font-size:14px">Loading…</p></div>
+  </div>
+</div>
+
 <!-- Header -->
 <div id="hdr">
   <div id="hdr-avatar">R</div>
@@ -199,6 +242,8 @@ body{font-family:'Inter',system-ui,sans-serif;background:#f0f4f8;height:100dvh;d
   <div id="hdr-actions">
     <a id="browse-btn" href="/properties/browse">🏠 Browse</a>
     <button onclick="openShortlist()">❤️ Saved <span id="sl-badge">0</span></button>
+    <button id="mine-btn" onclick="openMine()" style="display:none">🏡 My Properties</button>
+    <button id="login-btn" onclick="openLogin()">👤 Login</button>
   </div>
 </div>
 
@@ -430,6 +475,7 @@ async function toggleSave(id, btn) {
     btn.classList.toggle('saved', savedIds.has(id));
     localStorage.setItem('riya_saved', JSON.stringify([...savedIds]));
     updateBadge();
+    syncCustomerFav(id, savedIds.has(id));
   } catch(e){} finally { btn.disabled=false; }
 }
 function updateBadge(){ const n=savedIds.size; slBadge.textContent=n; slBadge.style.display=n?'inline':'none'; }
@@ -444,6 +490,91 @@ async function openShortlist() {
   } catch(e){ c.innerHTML='<p style="color:#dc2626;font-size:13px">Could not load.</p>'; }
 }
 function closeShortlist(){ document.getElementById('sl-panel').style.display='none'; }
+
+// ── Auth / accounts ───────────────────────────────────────────────────────────
+let TOKEN = localStorage.getItem('riya_token') || '';
+let CUST = null;
+function authHeaders(){ return TOKEN ? {'Authorization':'Bearer '+TOKEN} : {}; }
+
+async function refreshAuthUI(){
+  const loginBtn=document.getElementById('login-btn'), mineBtn=document.getElementById('mine-btn');
+  if(!TOKEN){ loginBtn.style.display=''; loginBtn.textContent='👤 Login'; loginBtn.onclick=openLogin; mineBtn.style.display='none'; CUST=null; return; }
+  try{
+    const r=await fetch('/me',{headers:authHeaders()}); if(!r.ok) throw 0;
+    CUST=await r.json();
+    loginBtn.textContent='👤 '+((CUST.name||CUST.email||'Me').split(' ')[0]);
+    loginBtn.onclick=openMine; mineBtn.style.display='';
+  }catch(e){ TOKEN=''; localStorage.removeItem('riya_token'); loginBtn.style.display=''; loginBtn.textContent='👤 Login'; loginBtn.onclick=openLogin; mineBtn.style.display='none'; }
+}
+function openLogin(){ document.getElementById('login-panel').style.display='flex'; document.getElementById('login-email').focus(); }
+function closeLogin(){ document.getElementById('login-panel').style.display='none'; }
+function closeMine(){ document.getElementById('mine-panel').style.display='none'; }
+
+let otpSent=false;
+async function loginAction(){
+  const email=document.getElementById('login-email').value.trim();
+  const msg=document.getElementById('login-msg'), btn=document.getElementById('login-action');
+  if(!email.includes('@')){ msg.style.color='#ef4444'; msg.textContent='Enter a valid email.'; return; }
+  if(!otpSent){
+    btn.disabled=true; msg.style.color='#64748b'; msg.textContent='Sending code…';
+    const r=await fetch('/auth/otp/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+    btn.disabled=false;
+    if((await r.json()).ok){ otpSent=true; document.getElementById('otp-row').style.display=''; btn.textContent='Verify & sign in'; msg.style.color='#16a34a'; msg.textContent='Code sent to '+email+' — check your inbox.'; document.getElementById('login-otp').focus(); }
+    else { msg.style.color='#ef4444'; msg.textContent='Could not send code. Try again.'; }
+  } else {
+    const code=document.getElementById('login-otp').value.trim();
+    btn.disabled=true; msg.style.color='#64748b'; msg.textContent='Verifying…';
+    const r=await fetch('/auth/otp/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,code})});
+    btn.disabled=false;
+    if(r.ok){ onLoggedIn((await r.json()).token); } else { msg.style.color='#ef4444'; msg.textContent='Wrong or expired code.'; }
+  }
+}
+async function handleGoogle(resp){
+  const r=await fetch('/auth/google',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({credential:resp.credential})});
+  if(r.ok){ onLoggedIn((await r.json()).token); } else { const m=document.getElementById('login-msg'); m.style.color='#ef4444'; m.textContent='Google sign-in failed.'; }
+}
+async function onLoggedIn(token){
+  TOKEN=token; localStorage.setItem('riya_token',token); otpSent=false;
+  document.getElementById('otp-row').style.display='none'; document.getElementById('login-action').textContent='Send code'; document.getElementById('login-msg').textContent='';
+  closeLogin(); await refreshAuthUI();
+  for(const id of savedIds){ try{ await fetch('/me/favourites',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({property_id:id})}); }catch(e){} }
+  addBubble('You\'re signed in'+(CUST&&CUST.name?', '+CUST.name.split(' ')[0]:'')+'! 🎉 Your favourites and visits are saved to your account now.', 'riya');
+}
+function logout(){ TOKEN=''; localStorage.removeItem('riya_token'); closeMine(); refreshAuthUI(); }
+async function initGoogle(){
+  try{
+    const cfg=await (await fetch('/auth/config')).json();
+    if(!cfg.google_client_id || !window.google || !google.accounts) return;
+    google.accounts.id.initialize({client_id:cfg.google_client_id, callback:handleGoogle});
+    google.accounts.id.renderButton(document.getElementById('gbtn'),{theme:'outline',size:'large',width:300,text:'continue_with'});
+  }catch(e){}
+}
+async function syncCustomerFav(id, add){
+  if(!TOKEN) return;
+  try{ await fetch('/me/favourites',{method:add?'POST':'DELETE',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({property_id:id})}); }catch(e){}
+}
+async function openMine(){
+  document.getElementById('mine-panel').style.display='flex';
+  document.getElementById('mine-who').textContent=(CUST&&CUST.email)?('Signed in as '+CUST.email):'';
+  const c=document.getElementById('mine-cards'); c.innerHTML='<p style="color:#94a3b8;font-size:14px">Loading…</p>';
+  try{
+    const d=await (await fetch('/me/properties',{headers:authHeaders()})).json();
+    c.innerHTML='';
+    if(d.visits && d.visits.length){
+      const v=document.createElement('div'); v.style.marginBottom='16px';
+      v.innerHTML='<h3 style="font-size:15px;margin:4px 0 8px;color:#0f172a">📅 Your visits</h3>'+
+        d.visits.map(x=>{ const dt=x.scheduled_at?new Date(x.scheduled_at).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}):'time TBD'; return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:6px;font-size:14px">🏠 <b>'+dt+'</b> — <span style="text-transform:capitalize;color:#64748b">'+(x.status||'')+'</span></div>'; }).join('');
+      c.appendChild(v);
+    }
+    const h=document.createElement('h3'); h.style.cssText='font-size:15px;margin:4px 0 8px;color:#0f172a'; h.textContent='❤️ Your favourites'; c.appendChild(h);
+    if(!d.favourites || !d.favourites.length){ const p=document.createElement('p'); p.style.cssText='color:#94a3b8;font-size:14px'; p.textContent='No favourites yet — tap 🤍 on a property, or ask Riya to “save the 2nd one”.'; c.appendChild(p); }
+    else {
+      if(d.favourites.length>1){ const cmp=document.createElement('button'); cmp.textContent='⚖️ Compare my favourites'; cmp.style.cssText='width:100%;padding:10px;border:0;border-radius:10px;background:#eff6ff;color:#2563eb;font-weight:600;cursor:pointer;margin-bottom:12px'; cmp.onclick=()=>{ closeMine(); inp.value='compare my saved properties'; send(); }; c.appendChild(cmp); }
+      d.favourites.forEach((p,i)=>{ c.appendChild(buildCard(p,i+1)); const ask=document.createElement('button'); ask.textContent='💬 Ask Riya about this'; ask.style.cssText='width:100%;padding:9px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;color:#334155;font-weight:500;cursor:pointer;margin:-6px 0 14px'; ask.onclick=()=>{ closeMine(); inp.value='tell me about the '+(p.bhk?p.bhk+' BHK ':'')+(p.property_type||'property')+' in '+(p.area||''); send(); }; c.appendChild(ask); });
+    }
+  }catch(e){ c.innerHTML='<p style="color:#dc2626;font-size:13px">Could not load your properties.</p>'; }
+}
+window.addEventListener('load',()=>{ refreshAuthUI(); initGoogle(); });
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 function openLb(src){ document.getElementById('lb-img').src=src; document.getElementById('lb').style.display='flex'; }
