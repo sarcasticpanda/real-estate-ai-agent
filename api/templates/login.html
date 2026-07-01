@@ -129,13 +129,22 @@ async function handleGoogle(resp){
     else { msg.style.color='#c0492f'; msg.textContent='Google sign-in failed.'; }
   }catch(e){ msg.style.color='#c0492f'; msg.textContent='Google sign-in failed.'; }
 }
+function hideGoogle(){ var g=document.getElementById('gbtn'); if(g)g.style.display='none'; var d=document.querySelector('.divider'); if(d)d.style.display='none'; }
 (async function(){
-  try{
-    var cfg=await (await fetch('/auth/config')).json();
-    if(!cfg.google_client_id || !window.google || !google.accounts){ document.getElementById('gbtn').style.display='none'; document.querySelector('.divider').style.display='none'; return; }
-    google.accounts.id.initialize({client_id:cfg.google_client_id, callback:handleGoogle});
-    google.accounts.id.renderButton(document.getElementById('gbtn'),{theme:'outline',size:'large',width:340,text:'continue_with'});
-  }catch(e){ document.getElementById('gbtn').style.display='none'; }
+  var cfg={};
+  try{ cfg=await (await fetch('/auth/config')).json(); }catch(e){}
+  if(!cfg.google_client_id){ hideGoogle(); return; }
+  // The GSI script loads async — wait for it before rendering the button.
+  var tries=0;
+  (function ready(){
+    if(window.google && google.accounts && google.accounts.id){
+      try{
+        google.accounts.id.initialize({client_id:cfg.google_client_id, callback:handleGoogle});
+        google.accounts.id.renderButton(document.getElementById('gbtn'),{theme:'outline',size:'large',width:340,text:'continue_with',shape:'rectangular'});
+      }catch(e){ hideGoogle(); }
+    } else if(tries++ < 40){ setTimeout(ready,150); }
+    else { hideGoogle(); }
+  })();
 })();
 </script>
 </body>
