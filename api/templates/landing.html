@@ -93,20 +93,21 @@ nav{position:sticky;top:0;z-index:50;background:rgba(246,244,236,.82);backdrop-f
 .dm-typing span:nth-child(2){animation-delay:.15s}.dm-typing span:nth-child(3){animation-delay:.3s}
 @keyframes bnc{0%,60%,100%{transform:none}30%{transform:translateY(-5px)}}
 
-/* Floating cards OUTSIDE the phone — pop in once on load, then gently drift */
+/* Floating cards OUTSIDE the phone — pop in on their chat cue, then gently drift.
+   (scale is on the `scale` property so it composes with floaty's translateY.) */
 @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
-@keyframes popIn{0%{opacity:0;transform:scale(.9) translateY(8px)}100%{opacity:1;transform:scale(1) translateY(0)}}
+.pop-enter{opacity:0;scale:.88;transition:opacity .45s ease,scale .55s cubic-bezier(.34,1.56,.64,1)}
+.pop-enter.in{opacity:1;scale:1}
 .info-pop{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);
   border-radius:14px;padding:11px 14px;box-shadow:0 18px 40px rgba(18,33,27,.18)}
 .info-pop .ipi{width:34px;height:34px;border-radius:10px;background:var(--emerald-lt);color:var(--emerald);
   display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
 .info-pop .ip-t{font-size:13px;font-weight:600;line-height:1.15}
 .info-pop .ip-s{font-size:11.5px;color:var(--ink-soft)}
-.cal-pill{position:absolute;top:40px;left:-30px;width:216px;z-index:4;
-  animation:popIn .55s cubic-bezier(.34,1.56,.64,1) .12s both, floaty 6s ease-in-out .72s infinite}
-.feat-float{position:absolute;bottom:28px;right:-12px;width:230px;background:var(--card);border-radius:16px;
+.cal-pill{position:absolute;top:40px;left:-30px;width:216px;z-index:4;animation:floaty 6s ease-in-out infinite}
+.feat-float{position:absolute;bottom:28px;right:-40px;width:230px;background:var(--card);border-radius:16px;
   box-shadow:0 22px 50px rgba(18,33,27,.22);border:1px solid var(--line);overflow:hidden;z-index:3;
-  animation:popIn .55s cubic-bezier(.34,1.56,.64,1) .26s both, floaty 5s ease-in-out .86s infinite}
+  animation:floaty 5s ease-in-out infinite}
 .feat-float img{width:100%;height:110px;object-fit:cover;display:block;background:var(--paper-2)}
 .feat-float .ff-tag{position:absolute;top:9px;left:9px;background:rgba(18,33,27,.72);color:#fff;font-size:10.5px;font-weight:600;padding:3px 9px;border-radius:20px;display:flex;align-items:center;gap:4px;z-index:2}
 .feat-float .ff-b{padding:11px 13px}
@@ -188,6 +189,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
 
 @media(prefers-reduced-motion:reduce){
   .feat-float,.cal-pill,.marquee-track,.eyebrow .live::after{animation:none}
+  .pop-enter{opacity:1;scale:1;transition:none}
   .reveal{opacity:1;transform:none;transition:none}
   .dm,.dm-card{opacity:1;transform:none;animation:none}
 }
@@ -231,7 +233,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
     </div>
 
     <div class="hero-visual reveal">
-      <div class="info-pop cal-pill" id="cal-pill">
+      <div class="info-pop cal-pill pop-enter" id="cal-pill">
         <div class="ipi"><i class="ph ph-calendar-check"></i></div>
         <div><div class="ip-t">Visit booked</div><div class="ip-s">added to your calendar</div></div>
       </div>
@@ -244,7 +246,7 @@ footer{border-top:1px solid var(--line);padding:34px 0;color:var(--ink-soft);fon
           <div class="pchat-body" id="demo"></div>
         </div>
       </div>
-      <div class="feat-float" id="feat-float">
+      <div class="feat-float pop-enter" id="feat-float">
         <span class="ff-tag"><i class="ph-fill ph-star"></i> Featured</span>
         <img id="ff-img" alt="Featured home" style="display:none" onerror="this.style.visibility='hidden'">
         <div class="ff-b">
@@ -387,12 +389,15 @@ var FEAT_IMG='';
 })();
 
 /* ── Animated "Riya at work" demo ──
-   The chat inside the phone flows like WhatsApp. The two side cards
-   (Featured home, "Visit booked") stay put and gently drift — no sudden pops. */
+   The chat inside the phone flows like WhatsApp. Each side card pops in when
+   its moment arrives in the chat (Featured when the home is shown, "Visit
+   booked" when confirmed), stays put in place, and gently drifts. */
 (function(){
   var body=document.getElementById('demo');
   if(!body)return;
   var reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  var cal=document.getElementById('cal-pill'), feat=document.getElementById('feat-float');
+  function pop(el){if(el)el.classList.add('in');}   // pop in once, then it stays
   function bubble(cls,html){
     var d=document.createElement('div');d.className=cls;d.innerHTML=html;body.appendChild(d);
     while(body.children.length>6)body.removeChild(body.firstChild);
@@ -410,12 +415,13 @@ var FEAT_IMG='';
     bubble('dm dm-u','2 BHK in Gomti Nagar, under ₹40L 🙂'); await wait(1150);
     var t=typing(); await wait(950); t.remove();
     bubble('dm dm-r','Found 3 verified homes near you — here\'s a favourite:'); await wait(500);
-    card(); await wait(1600);
+    card(); pop(feat); await wait(1600);            // Featured card pops in with the home
     bubble('dm dm-u','Can I visit this Saturday?'); await wait(1150);
     var t2=typing(); await wait(950); t2.remove();
     bubble('dm dm-r','Checking with the broker…'); await wait(1150);
     var t3=typing(); await wait(950); t3.remove();
-    bubble('dm dm-r','Confirmed for Sat, 5 PM ✓ Added to your calendar.'); await wait(3200);
+    bubble('dm dm-r','Confirmed for Sat, 5 PM ✓ Added to your calendar.'); pop(cal); // pill pops in on confirm
+    await wait(3200);
     loop();
   }
   loop();
