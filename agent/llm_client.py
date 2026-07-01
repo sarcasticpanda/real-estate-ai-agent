@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 
 _groq_client = None
 
@@ -37,19 +38,63 @@ def complete(
     json_mode: bool = False,
 ) -> str:
     """
-    Chat completion with Gemini-primary, Groq-fallback.
+    Chat completion with a 3-tier fallback: Gemini → Groq → OpenRouter.
 
     messages: OpenAI-style [{"role": "system"|"user"|"assistant", "content": str}, ...]
     json_mode: ask the model to return a single JSON object.
     Returns the assistant text (JSON string if json_mode).
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if gemini_key:
+    errors = []
+    if os.environ.get("GEMINI_API_KEY"):
         try:
-            return _gemini_complete(messages, temperature, max_tokens, json_mode, gemini_key)
+            return _gemini_complete(messages, temperature, max_tokens, json_mode, os.environ["GEMINI_API_KEY"])
         except Exception as e:
-            logger.warning(f"[llm] Gemini failed ({type(e).__name__}: {str(e)[:120]}) — falling back to Groq")
-    return _groq_complete(messages, temperature, max_tokens, json_mode)
+            errors.append(f"gemini:{type(e).__name__}")
+            logger.warning(f"[llm] Gemini failed ({type(e).__name__}: {str(e)[:100]}) — trying Groq")
+    try:
+        return _groq_complete(messages, temperature, max_tokens, json_mode)
+    except Exception as e:
+        errors.append(f"groq:{type(e).__name__}")
+        logger.warning(f"[llm] Groq failed ({type(e).__name__}: {str(e)[:100]}) — trying OpenRouter")
+    if os.environ.get("OPENROUTER_API_KEY"):
+        try:
+            return _openrouter_complete(messages, temperature, max_tokens, json_mode, os.environ["OPENROUTER_API_KEY"])
+        except Exception as e:
+            errors.append(f"openrouter:{type(e).__name__}")
+            logger.error(f"[llm] OpenRouter failed ({type(e).__name__}: {str(e)[:100]})")
+    raise RuntimeError("all LLM providers failed: " + ", ".join(errors))
+
+
+# ── OpenRouter (OpenAI-compatible REST) ───────────────────────────────────────
+
+def _openrouter_complete(messages, temperature, max_tokens, json_mode, key) -> str:
+    body = {
+        "model": OPENROUTER_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "HTTP-Referer": "https://144-24-156-187.sslip.io",
+            "X-Title": "Riya Real Estate",
+        },
+        json=body,
+        timeout=45,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"OpenRouter no choices: {str(data)[:160]}")
+    text = (choices[0].get("message", {}).get("content") or "").strip()
+    if not text:
+        raise RuntimeError("OpenRouter returned empty text")
+    return text
 
 
 # ── Gemini (REST) ─────────────────────────────────────────────────────────────
