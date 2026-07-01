@@ -4,56 +4,55 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Browse Properties — Riya Lucknow</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link href="/static/shared.css" rel="stylesheet">
 <style>
-.hero{background:linear-gradient(135deg,#1e40af 0%,#2563eb 60%,#0ea5e9 100%);
-  color:#fff;padding:32px 20px 28px;text-align:center}
-.hero h1{font-size:26px;font-weight:800;margin-bottom:6px}
-.hero p{font-size:14px;opacity:.85}
-.filter-bar{background:#fff;border-bottom:1px solid #e2e8f0;padding:12px 16px;
-  display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;top:0;z-index:50;
-  box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.hero{background:var(--slate-900);color:var(--paper);padding:48px 20px 40px;text-align:center;position:relative;overflow:hidden}
+.hero::after{content:'';position:absolute;inset:0;background:radial-gradient(circle at 80% 0%,rgba(15,122,82,.35),transparent 55%);pointer-events:none}
+.hero h1{font-family:var(--display);font-size:clamp(26px,4vw,40px);font-weight:700;margin-bottom:8px;letter-spacing:-.02em;position:relative}
+.hero p{font-size:15px;color:#b7c4bd;position:relative}
+.filter-bar{background:var(--white);border-bottom:1px solid var(--slate-200);padding:14px 16px;
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;top:64px;z-index:50;
+  box-shadow:var(--shadow-sm)}
 .filter-bar input,.filter-bar select{
-  padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;
-  font-size:13px;font-family:inherit;outline:none;background:#f8fafc;
+  padding:10px 13px;border:1.5px solid var(--slate-200);border-radius:11px;
+  font-size:13px;font-family:inherit;outline:none;background:var(--slate-50);
   transition:border-color .15s}
-.filter-bar input:focus,.filter-bar select:focus{border-color:#2563eb;background:#fff}
+.filter-bar input:focus,.filter-bar select:focus{border-color:var(--brand);background:#fff}
 .filter-bar input{width:160px}
 .filter-bar select{width:130px;cursor:pointer}
-.search-btn{padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:8px;
-  font-weight:700;font-size:13px;cursor:pointer;transition:background .15s;white-space:nowrap}
-.search-btn:hover{background:#1d4ed8}
-#count{color:#64748b;font-size:13px;padding:12px 16px 0;font-weight:500}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:16px;padding:14px 16px 32px}
-.pcard{background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e2e8f0;
-  box-shadow:0 2px 8px rgba(0,0,0,.07);transition:transform .2s,box-shadow .2s;cursor:pointer}
-.pcard:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,.12)}
-.pcard-img{height:180px;background:#f1f5f9;overflow:hidden;position:relative}
-.pcard-img img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
-.pcard:hover .pcard-img img{transform:scale(1.05)}
-.pcard-img-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#94a3b8;font-size:13px}
-.pcard-type-badge{position:absolute;top:10px;right:10px;background:rgba(0,0,0,.55);
-  color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;backdrop-filter:blur(4px)}
-.pcard-body{padding:14px}
-.pcard-price{font-size:18px;font-weight:800;color:#2563eb;margin-bottom:4px}
-.pcard-title{font-size:14px;font-weight:600;color:#0f172a;margin-bottom:3px}
-.pcard-loc{font-size:12px;color:#64748b;margin-bottom:10px;display:flex;align-items:center;gap:4px}
-.pcard-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
-.pchip{background:#eff6ff;color:#2563eb;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px}
-.pchip-green{background:#f0fdf4;color:#059669}
-.pcard-pois{font-size:12px;color:#64748b;margin-bottom:12px;line-height:1.7}
+.search-btn{padding:11px 22px;background:var(--brand);color:#fff;border:none;border-radius:11px;
+  font-weight:600;font-size:13px;cursor:pointer;transition:all .15s;white-space:nowrap;box-shadow:0 4px 12px rgba(15,122,82,.22)}
+.search-btn:hover{background:var(--brand-dk);transform:translateY(-1px)}
+#count{color:var(--slate-500);font-size:13px;padding:16px 16px 0;font-weight:500}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:18px;padding:16px 16px 40px}
+.pcard{background:var(--white);border-radius:var(--radius);overflow:hidden;border:1px solid var(--slate-200);
+  box-shadow:var(--shadow-sm);transition:transform .22s,box-shadow .22s;cursor:pointer}
+.pcard:hover{transform:translateY(-4px);box-shadow:var(--shadow-lg)}
+.pcard-img{height:190px;background:var(--slate-100);overflow:hidden;position:relative}
+.pcard-img img{width:100%;height:100%;object-fit:cover;transition:transform .4s}
+.pcard:hover .pcard-img img{transform:scale(1.06)}
+.pcard-img-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--slate-400);font-size:13px}
+.pcard-type-badge{position:absolute;top:10px;right:10px;background:rgba(18,33,27,.62);
+  color:#fff;font-size:11px;font-weight:600;padding:4px 10px;border-radius:20px;backdrop-filter:blur(4px)}
+.pcard-body{padding:16px}
+.pcard-price{font-family:var(--display);font-size:19px;font-weight:700;color:var(--brand);margin-bottom:4px}
+.pcard-title{font-size:14px;font-weight:600;color:var(--slate-900);margin-bottom:3px}
+.pcard-loc{font-size:12px;color:var(--slate-500);margin-bottom:10px;display:flex;align-items:center;gap:4px}
+.pcard-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+.pchip{background:var(--slate-100);color:var(--slate-500);border:1px solid var(--slate-200);font-size:11px;font-weight:500;padding:3px 10px;border-radius:9px}
+.pchip-green{background:var(--brand-lt);color:var(--brand);border-color:transparent}
+.pcard-pois{font-size:12px;color:var(--slate-500);margin-bottom:12px;line-height:1.7}
 .pcard-pois span{display:inline-block;margin-right:10px}
 .pcard-actions{display:flex;gap:8px}
-.btn-ask{flex:1;padding:9px;background:#2563eb;color:#fff;border:none;border-radius:8px;
-  font-size:13px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;
-  display:flex;align-items:center;justify-content:center;gap:5px;transition:background .15s}
-.btn-ask:hover{background:#1d4ed8}
-.empty-state{text-align:center;padding:80px 20px;color:#94a3b8}
+.btn-ask{flex:1;padding:11px;background:var(--brand);color:#fff;border:none;border-radius:11px;
+  font-size:13px;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;
+  display:flex;align-items:center;justify-content:center;gap:5px;transition:all .15s}
+.btn-ask:hover{background:var(--brand-dk)}
+.empty-state{text-align:center;padding:80px 20px;color:var(--slate-400)}
 .empty-state .ei{font-size:48px;margin-bottom:14px}
-.empty-state h2{font-size:18px;font-weight:700;color:#334155;margin-bottom:8px}
+.empty-state h2{font-family:var(--display);font-size:20px;font-weight:700;color:var(--slate-700);margin-bottom:8px}
 .empty-state p{font-size:14px}
-.empty-state a{color:#2563eb;font-weight:600;text-decoration:none}
+.empty-state a{color:var(--brand);font-weight:600;text-decoration:none}
 @media(max-width:640px){
   .filter-bar{gap:6px}
   .filter-bar input{width:calc(50% - 3px)}
@@ -71,7 +70,7 @@
 <nav class="topnav">
   <a class="topnav-brand" href="/">Riya</a>
   <div class="topnav-links">
-    <a href="/">💬 Chat</a>
+    <a href="/chat">💬 <span>Chat</span></a>
     <a href="/properties/browse" class="active">🏠 <span>Browse</span></a>
     <a href="/broker">🔑 <span>Broker</span></a>
   </div>
@@ -112,7 +111,7 @@ async function load(){
   document.getElementById('count').textContent=ps.length+' propert'+(ps.length===1?'y':'ies')+' found';
   const g=document.getElementById('grid');
   if(!ps.length){
-    g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><div class="ei">🏠</div><h2>No properties found</h2><p>Try different filters, or <a href="/">chat with Riya</a> for personalised recommendations.</p></div>';
+    g.innerHTML='<div class="empty-state" style="grid-column:1/-1"><div class="ei">🏠</div><h2>No properties found</h2><p>Try different filters, or <a href="/chat">chat with Riya</a> for personalised recommendations.</p></div>';
     return;
   }
   g.innerHTML='';
@@ -131,7 +130,7 @@ async function load(){
       +(chips?'<div class="pcard-chips">'+chips+'</div>':'')
       +(poi?'<div class="pcard-pois">'+poi+'</div>':'')
       +'<div class="pcard-actions">'
-      +'<a class="btn-ask" href="/?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'')+'">💬 Ask Riya about this</a>'
+      +'<a class="btn-ask" href="/chat?prop='+encodeURIComponent(p.id)+'&area='+encodeURIComponent(p.area||'')+'&bhk='+(p.bhk||'')+'&price='+encodeURIComponent(p.price_str||'')+'">💬 Ask Riya about this</a>'
       +'</div>'
       +'</div>';
     g.appendChild(c);
