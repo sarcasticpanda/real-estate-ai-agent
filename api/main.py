@@ -937,6 +937,15 @@ async def landing_page():
     return HTMLResponse((_TEMPLATES_DIR / "chat.html").read_text(encoding="utf-8"))
 
 
+@app.get("/login", response_class=HTMLResponse)
+async def customer_login_page():
+    """Customer sign-in / sign-up page (JWT session) — separate from broker login."""
+    tmpl = _TEMPLATES_DIR / "login.html"
+    if tmpl.exists():
+        return HTMLResponse(tmpl.read_text(encoding="utf-8"))
+    return HTMLResponse("<p>Login unavailable.</p>", status_code=500)
+
+
 @app.get("/chat", response_class=HTMLResponse)
 async def web_chat():
     """Chat UI."""

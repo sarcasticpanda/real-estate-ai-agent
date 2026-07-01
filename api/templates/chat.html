@@ -513,7 +513,7 @@ async function refreshAuthUI(){
     loginBtn.onclick=openMine; mineBtn.style.display='';
   }catch(e){ TOKEN=''; localStorage.removeItem('riya_token'); loginBtn.style.display=''; loginBtn.textContent='👤 Login'; loginBtn.onclick=openLogin; mineBtn.style.display='none'; }
 }
-function openLogin(){ document.getElementById('login-panel').style.display='flex'; document.getElementById('login-email').focus(); }
+function openLogin(){ location.href='/login?next=/chat'; }
 function closeLogin(){ document.getElementById('login-panel').style.display='none'; }
 function closeMine(){ document.getElementById('mine-panel').style.display='none'; }
 
