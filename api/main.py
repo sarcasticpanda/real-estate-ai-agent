@@ -29,7 +29,7 @@ import hashlib
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -186,6 +186,119 @@ async def get_shortlist(session_id: str):
     except Exception as e:
         logger.error(f"Shortlist fetch error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Customer auth (email OTP + Google) ────────────────────────────────────────
+
+class OtpRequest(BaseModel):
+    email: str
+
+class OtpVerify(BaseModel):
+    email: str
+    code: str
+
+class GoogleAuth(BaseModel):
+    credential: str
+
+class FavReq(BaseModel):
+    property_id: str
+
+
+def _current_customer(authorization: str) -> dict | None:
+    from api.auth import verify_jwt, get_customer
+    claims = verify_jwt(authorization or "")
+    if not claims:
+        return None
+    return get_customer(claims.get("sub"))
+
+
+@app.post("/auth/otp/request")
+async def auth_otp_request(req: OtpRequest):
+    from api.auth import request_otp
+    return {"ok": request_otp(req.email)}
+
+
+@app.post("/auth/otp/verify")
+async def auth_otp_verify(req: OtpVerify):
+    from api.auth import verify_otp, get_or_create_customer, issue_jwt
+    if not verify_otp(req.email, req.code):
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+    cust = get_or_create_customer(req.email)
+    return {"token": issue_jwt(cust), "customer": {"email": cust["email"], "name": cust.get("name")}}
+
+
+@app.post("/auth/google")
+async def auth_google(req: GoogleAuth):
+    from api.auth import verify_google, get_or_create_customer, issue_jwt
+    info = verify_google(req.credential)
+    if not info:
+        raise HTTPException(status_code=401, detail="Google sign-in failed (is GOOGLE_OAUTH_CLIENT_ID set?)")
+    cust = get_or_create_customer(info["email"], info.get("name"), info.get("sub"))
+    return {"token": issue_jwt(cust), "customer": {"email": cust["email"], "name": cust.get("name")}}
+
+
+@app.get("/me")
+async def me(authorization: str = Header(default="")):
+    cust = _current_customer(authorization)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return {"email": cust["email"], "name": cust.get("name"),
+            "phone": cust.get("phone"), "favourites": cust.get("favourites") or []}
+
+
+@app.post("/me/favourites")
+async def add_favourite(req: FavReq, authorization: str = Header(default="")):
+    from api.auth import set_customer_favourites
+    cust = _current_customer(authorization)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    favs = list(cust.get("favourites") or [])
+    if req.property_id not in favs:
+        favs.append(req.property_id)
+        set_customer_favourites(cust["id"], favs)
+    return {"ok": True, "count": len(favs)}
+
+
+@app.delete("/me/favourites")
+async def remove_favourite(req: FavReq, authorization: str = Header(default="")):
+    from api.auth import set_customer_favourites
+    cust = _current_customer(authorization)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    favs = [p for p in (cust.get("favourites") or []) if p != req.property_id]
+    set_customer_favourites(cust["id"], favs)
+    return {"ok": True, "count": len(favs)}
+
+
+@app.get("/me/properties")
+async def my_properties(authorization: str = Header(default="")):
+    """Everything this customer liked + their booked visits (for the My Properties page)."""
+    cust = _current_customer(authorization)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Not logged in")
+    from rag.retriever import to_card
+    from database.supabase_client import get_client
+    c = get_client()
+
+    favs = cust.get("favourites") or []
+    cards = []
+    if favs:
+        rows = c.table("properties").select("*").in_("id", favs).execute().data or []
+        cards = [to_card({"id": r["id"], "data": r["data"], "score": 0, "similarity": 1.0}) for r in rows]
+
+    visits = []
+    phone = cust.get("phone")
+    if phone:
+        digits = "".join(ch for ch in phone if ch.isdigit())[-10:]
+        leads = c.table("leads").select("id").ilike("phone", f"%{digits}%").execute().data or []
+        lead_ids = [l["id"] for l in leads]
+        if lead_ids:
+            mts = (c.table("meetings").select("*").in_("lead_id", lead_ids)
+                   .neq("status", "cancelled").order("scheduled_at").execute().data) or []
+            visits = [{"scheduled_at": m.get("scheduled_at"), "status": m.get("status"),
+                       "property_id": m.get("property_id")} for m in mts]
+
+    return {"name": cust.get("name"), "email": cust["email"], "favourites": cards, "visits": visits}
 
 
 # ── Broker upload endpoint ────────────────────────────────────────────────────
