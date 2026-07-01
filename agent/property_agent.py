@@ -1604,6 +1604,9 @@ def _parse_visit_time(text: str):
 
 
 def _fmt_visit(dt) -> str:
+    # Stored times come back as UTC; display in IST. (Naive dts from parsing are already IST.)
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.astimezone(IST)
     h12 = dt.hour % 12 or 12
     ap = "am" if dt.hour < 12 else "pm"
     mm = f":{dt.minute:02d}" if dt.minute else ""
