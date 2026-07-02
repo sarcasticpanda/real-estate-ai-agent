@@ -324,47 +324,70 @@ def _resolve_customer(target: str, reply_context_id: str | None = None):
     return (None, None, None)
 
 
-def _broker_message_customer(text: str, reply_context_id: str | None = None):
+def _broker_message_customer(text: str, reply_context_id: str | None = None,
+                             broker_phone: str | None = None):
     """Broker asks us to relay a message to a customer, on the customer's OWN channel
-    (WhatsApp / Telegram / website). Returns reply str, or None if it isn't a relay."""
+    (WhatsApp / Telegram / website). Phrases it as Riya speaking on the consultant's
+    behalf, invites the customer to reply, and — if the broker committed to a time —
+    schedules a reminder to the broker. Returns reply str, or None if it isn't a relay."""
     import json
     from agent.llm_client import complete
     try:
         js = complete([
             {"role": "system", "content": (
-                "A real-estate broker wants to send a message to one of their customers. "
-                "Extract it. Return ONLY JSON: {\"target\":\"the customer's name or phone, or a "
-                "pronoun like 'him'/'her'/'them' if they didn't name anyone\","
-                "\"message\":\"the message to send, rewritten in first person from the broker to the "
-                "customer (e.g. 'I'll call you this evening')\"}. "
-                "If the broker is NOT asking to message a customer, return {\"target\":\"\",\"message\":\"\"}.")},
+                "A real-estate broker wants Riya to relay a message to one of their customers. "
+                "Return ONLY JSON with keys:\n"
+                "\"target\": the customer's name or phone, or a pronoun ('him'/'her'/'them') if unnamed.\n"
+                "\"message\": the update phrased as RIYA speaking TO the customer, referring to the "
+                "broker in the third person as 'your consultant' — e.g. 'Your consultant will call you "
+                "this evening tomorrow.' Do NOT write it in first person.\n"
+                "\"followup_when\": if the broker committed to contacting the customer at a time, the "
+                "time phrase exactly as said (e.g. 'this evening tomorrow', 'friday 5pm'); else \"\".\n"
+                "If the broker is NOT asking to message a customer, return everything empty.")},
             {"role": "user", "content": text},
-        ], temperature=0, max_tokens=160, json_mode=True)
+        ], temperature=0, max_tokens=180, json_mode=True)
         data = json.loads(js)
     except Exception:
         data = {}
     target = (data.get("target") or "").strip()
     message = (data.get("message") or "").strip()
+    followup_when = (data.get("followup_when") or "").strip()
     if not message:
         return None
 
     session_id, phone, name = _resolve_customer(target, reply_context_id)
     if not session_id and not phone:
         return ("Who should I message? *Reply to* the customer's lead/visit message, "
-                "or name them — e.g.\n*message Ravi: I'll call you this evening* "
+                "or name them — e.g.\n*message Ravi: your consultant will call this evening* "
                 "or *tell 9876543210 …*")
 
     first = (name or "").split()[0] if name else ""
-    body = (f"Hi{(' ' + first) if first else ''} 👋 A message from your Riya property consultant:\n\n"
-            f"{message}")
+    body = (f"Hi{(' ' + first) if first else ''} 👋 An update from Riya:\n\n"
+            f"{message}\n\n"
+            f"Need anything sooner or want to reschedule? Just reply here — I'm always around. 🌿")
     ok, channel = notify_customer(session_id, phone, body)
     who = name or phone or "them"
-    if ok:
-        return f"✅ Sent to *{who}* on {channel}:\n_{message}_"
-    return (f"I couldn't reach *{who}* on {channel} right now"
-            + (" — WhatsApp only allows messaging within 24 h of their last message."
-               if channel == "WhatsApp" else ".")
-            + " You may need to contact them directly.")
+    if not ok:
+        return (f"I couldn't reach *{who}* on {channel} right now"
+                + (" — WhatsApp only allows messaging within 24 h of their last message."
+                   if channel == "WhatsApp" else ".")
+                + " You may need to contact them directly.")
+
+    # If the broker committed to a time, remind them then (so they don't forget).
+    reminder_line = ""
+    if followup_when and broker_phone:
+        try:
+            from agent.property_agent import _parse_visit_time
+            from notifications.followups import add_followup
+            dt, when_str = _parse_visit_time(followup_when)
+            if dt:
+                add_followup(dt, broker_phone, name or who, phone, session_id,
+                             note=f"contact them ({when_str})")
+                reminder_line = f"\n⏰ I'll remind you to follow up around *{when_str}*."
+        except Exception as e:
+            logger.debug(f"followup schedule skipped: {e}")
+
+    return f"✅ Sent to *{who}* on {channel}:\n_{message}_{reminder_line}"
 
 
 def _broker_add_property_from_text(text: str, broker_phone: str) -> str:
@@ -478,7 +501,7 @@ def handle_broker_command(broker_phone: str, text: str, reply_context_id: str | 
     # Relay a message to a customer. Treat it as a relay if it's clearly a message verb
     # (not "tell me …"), OR the broker is replying to a customer's lead/visit notification.
     if reply_context_id or (_MSG_VERB_RE.search(tl) and not _ASK_SELF_RE.search(tl)):
-        relayed = _broker_message_customer(t, reply_context_id)
+        relayed = _broker_message_customer(t, reply_context_id, broker_phone)
         if relayed is not None:
             return relayed
     # Anything else — talk to them like a real assistant.

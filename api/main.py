@@ -72,6 +72,21 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def _start_background_scheduler():
+    """In-app scheduler — fires broker follow-up reminders when due (no external cron)."""
+    async def _loop():
+        while True:
+            try:
+                from notifications.followups import run_due_followups
+                await asyncio.to_thread(run_due_followups)
+            except Exception as e:
+                logger.debug(f"followup scheduler tick failed: {e}")
+            await asyncio.sleep(60)
+    asyncio.create_task(_loop())
+    logger.info("Background follow-up scheduler started")
+
+
 # ── Chat endpoint ────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
