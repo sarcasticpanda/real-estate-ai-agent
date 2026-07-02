@@ -205,9 +205,11 @@ def _broker_help_menu() -> str:
     return ("👋 *Here's what I can do for you*\n"
             "• *meetings* — your upcoming visits\n"
             "• *stats* — leads, listings & visit numbers\n"
+            "• *show new leads* / *who is negotiating* / *find Ravi* — search your pipeline\n"
+            "• *move Ravi to negotiating* / *put 9876543210 on hold* — move a lead\n"
             "• Reply *YES* / *NO* to a visit request I send you\n"
             "• *reschedule 9876543210 to Friday 5pm*\n"
-            "• *message Ravi: I'll call you this evening*\n"
+            "• *message Ravi: I'll call you this evening* — I text them + loop you on replies\n"
             "• *add 2 BHK flat in Gomti Nagar, 45 lakh, 1100 sqft, lift & parking*\n\n"
             "Or just talk to me normally — I'll help. 🏠")
 
@@ -509,6 +511,136 @@ def _broker_add_property_from_text(text: str, broker_phone: str) -> str:
     return f"Couldn't add it: {result.get('error', 'please check the details and try again')}"
 
 
+# ── Pipeline control from WhatsApp ───────────────────────────────────────────
+# Natural language → pipeline status. Order matters (specific before general).
+_STAGE_PATTERNS = [
+    (r"site\s*visit|\bvisited\b|\bmet\b|seen (the|it|property)", "met", "Site Visited"),
+    (r"visit\s*schedul|schedul|book(ed)?\s*(a\s*)?visit|for (a )?visit", "visit", "Visit Scheduled"),
+    (r"negotiat", "negotiating", "Negotiating"),
+    (r"\bwon\b|closed|deal done|sold|finali[sz]ed|booked the deal", "won", "Won"),
+    (r"on\s*hold|\bhold\b|waiting|pause|paused|not now", "waiting", "On Hold"),
+    (r"lost|not interested|\bdead\b|drop(ped)?", "lost", "Lost"),
+    (r"contact(ed)?|called|reached out|spoke", "contacted", "Contacted"),
+    (r"\bnew\b|fresh|reset", "new", "New"),
+]
+_STAGE_LABELS = {"new": "New", "contacted": "Contacted", "visit": "Visit Scheduled",
+                 "met": "Site Visited", "negotiating": "Negotiating", "won": "Won",
+                 "waiting": "On Hold", "lost": "Lost"}
+_MOVE_VERB_RE = re.compile(
+    r"\b(move|shift|put|mark|set|change|drag|reassign|update)\b", re.I)
+_SEARCH_VERB_RE = re.compile(
+    r"\b(show|list|search|find|who|which|give me|see|display|all)\b", re.I)
+
+
+def _parse_stage(text: str):
+    for pat, st, lbl in _STAGE_PATTERNS:
+        if re.search(pat, text, re.I):
+            return st, lbl
+    return None, None
+
+
+def _resolve_lead(text: str, reply_context_id: str | None = None):
+    """Find the lead a move/query refers to → lead row (id,name,phone,status) or None."""
+    from database.supabase_client import get_client
+    c = get_client()
+    m = re.search(r"\d{10}", re.sub(r"\D", " ", text))
+    if m:
+        rows = (c.table("leads").select("id,name,phone,status").ilike("phone", f"%{m.group(0)}%")
+                .order("created_at", desc=True).limit(1).execute().data) or []
+        if rows:
+            return rows[0]
+    # strip command + stage + filler words to isolate a name
+    cleaned = re.sub(
+        r"\b(move|shift|put|mark|set|change|drag|reassign|update|him|her|them|to|the|customer|"
+        r"lead|on|as|into|status|stage|new|contacted|visit|visited|schedul\w*|site|met|seen|"
+        r"negotiat\w*|won|closed|sold|hold|waiting|pause\w*|lost|not|interested|dead|drop\w*|"
+        r"back|please|pls|now|over|kindly|just|again|this|that)\b",
+        " ", text, flags=re.I)
+    name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z ]", " ", cleaned)).strip()
+    if len(name) >= 2:
+        # try the whole phrase, then individual tokens (longest first) — "Ravi back" → "Ravi"
+        candidates = [name] + sorted({w for w in name.split() if len(w) >= 2}, key=len, reverse=True)
+        for cand in candidates:
+            rows = (c.table("leads").select("id,name,phone,status").ilike("name", f"%{cand}%")
+                    .order("created_at", desc=True).limit(1).execute().data) or []
+            if rows:
+                return rows[0]
+    if reply_context_id:
+        ctx = context_customer(reply_context_id)
+        if ctx and ctx[1]:
+            rows = (c.table("leads").select("id,name,phone,status").ilike("phone", f"%{ctx[1]}%")
+                    .limit(1).execute().data) or []
+            if rows:
+                return rows[0]
+    return None
+
+
+def _broker_move_lead(text: str, reply_context_id: str | None = None):
+    """Broker moves a customer to a pipeline stage. Returns reply, or None if no stage."""
+    st, lbl = _parse_stage(text)
+    if not st:
+        return None
+    lead = _resolve_lead(text, reply_context_id)
+    if not lead:
+        return ("Which customer? *Reply to* their card/lead message, or name them — e.g.\n"
+                "*move Ravi to negotiating* or *put 9876543210 on hold*.")
+    from database.supabase_client import update_lead_status
+    try:
+        update_lead_status(lead["id"], st)
+    except Exception as e:
+        logger.error(f"broker move lead failed: {e}")
+        return "I couldn't update that just now — please try again."
+    nm = lead.get("name") or "the customer"
+    tip = ""
+    if st in ("met", "negotiating"):
+        tip = f"\nWant me to check in with them? Reply *message {nm}: …*"
+    return f"✅ Moved *{nm}* → *{lbl}*.{tip}"
+
+
+def _broker_search_leads(text: str):
+    """List leads, optionally filtered by a stage and/or a name/phone in the message."""
+    from database.supabase_client import get_client
+    c = get_client()
+    st, lbl = _parse_stage(text)
+    q = (c.table("leads").select("name,phone,status,preferred_area,budget_max,created_at")
+         .order("created_at", desc=True).limit(20))
+    if st:
+        q = q.eq("status", st)
+    # a phone or a name to narrow by?
+    mph = re.search(r"\d{10}", re.sub(r"\D", " ", text))
+    name = ""
+    if mph:
+        q = q.ilike("phone", f"%{mph.group(0)}%")
+    else:
+        cleaned = re.sub(
+            r"\b(show|list|search|find|who|which|give|me|see|display|all|for|lead|leads|customer|"
+            r"client|pipeline|in|is|are|the|my|status|stage|new|contacted|visit\w*|schedul\w*|site|"
+            r"met|negotiat\w*|won|closed|sold|hold|waiting|pause\w*|lost|on|look\s?up|lookup)\b",
+            " ", text, flags=re.I)
+        name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z ]", " ", cleaned)).strip()
+        if len(name) >= 2:
+            q = q.ilike("name", f"%{name}%")
+    try:
+        rows = q.execute().data or []
+    except Exception as e:
+        logger.warning(f"broker search leads failed: {e}")
+        return "Couldn't fetch leads right now — try again in a moment."
+    title = name or (mph.group(0) if mph else None) or lbl or "All leads"
+    if not rows:
+        return f"No leads found for *{title}*."
+    head = f"🔎 *{title}* ({len(rows)}):"
+    lines = [head]
+    for r in rows[:15]:
+        area = r.get("preferred_area") or ""
+        b = r.get("budget_max")
+        bs = f" · ₹{b/1e7:.1f}Cr" if b else ""
+        stlbl = _STAGE_LABELS.get(r.get("status"), r.get("status") or "")
+        extra = " · ".join(x for x in [stlbl, area] if x)
+        lines.append(f"• *{r.get('name') or 'Unknown'}* ({r.get('phone') or ''})"
+                     + (f" — {extra}" if extra else "") + bs)
+    return "\n".join(lines)
+
+
 def _broker_assistant_llm(broker_phone: str, text: str) -> str:
     """Conversational broker assistant — replaces the old canned greeting."""
     from agent.llm_client import complete
@@ -562,6 +694,16 @@ def handle_broker_command(broker_phone: str, text: str, reply_context_id: str | 
 
     if _MEETINGS_RE.search(tl):
         return _broker_meetings_summary()
+    # Move a lead across the pipeline: "move Ravi to negotiating", "put X on hold"
+    if _MOVE_VERB_RE.search(tl) and _parse_stage(tl)[0]:
+        moved = _broker_move_lead(t, reply_context_id)
+        if moved is not None:
+            return moved
+    # Search / list the pipeline: "show new leads", "who is negotiating", "find Ravi"
+    if re.search(r"\b(find|search|look\s?up|lookup)\b", tl) or (
+            _SEARCH_VERB_RE.search(tl) and re.search(
+                r"\b(lead|leads|customer|client|pipeline|list|new|contacted|negotiat|won|hold|waiting|visit|lost)\b", tl)):
+        return _broker_search_leads(t)
     if _STATS_RE.search(tl) or (_HOWMANY_RE.search(tl) and _BIZ_NOUN_RE.search(tl)):
         return _broker_stats()
     if _HELP_RE.search(tl):

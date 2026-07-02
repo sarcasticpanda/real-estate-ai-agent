@@ -1741,10 +1741,22 @@ async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
         raise HTTPException(status_code=400, detail="Invalid pipeline stage")
     try:
         update_lead_status(lead_id, req.status, req.notes)
+        # Notify the broker on WhatsApp that this lead moved (they asked to be looped in).
+        try:
+            from database.supabase_client import get_client
+            from notifications.whatsapp_notifier import _send
+            from agent.broker_confirmation import _STAGE_LABELS
+            rows = get_client().table("leads").select("name").eq("id", lead_id).limit(1).execute().data
+            nm = (rows[0].get("name") if rows else None) or "A lead"
+            bph = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE")
+            if bph:
+                _send(bph, f"📌 *{nm}* moved to *{_STAGE_LABELS.get(req.status, req.status)}* (via dashboard).")
+        except Exception as _e:
+            logger.debug(f"lead-move WA notify skipped: {_e}")
         return {"ok": True}
     except Exception as e:
         logger.error(f"broker_update_lead error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Could not update lead")
 
 
 class PropertySold(BaseModel):
