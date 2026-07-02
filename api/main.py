@@ -1750,7 +1750,7 @@ async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
             nm = (rows[0].get("name") if rows else None) or "A lead"
             bph = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE")
             if bph:
-                _send(bph, f"📌 *{nm}* moved to *{_STAGE_LABELS.get(req.status, req.status)}* (via dashboard).")
+                _send(bph, f"*{nm}* moved to *{_STAGE_LABELS.get(req.status, req.status)}* (via dashboard).")
         except Exception as _e:
             logger.debug(f"lead-move WA notify skipped: {_e}")
         return {"ok": True}

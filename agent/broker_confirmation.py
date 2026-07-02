@@ -188,31 +188,31 @@ def _broker_meetings_summary() -> str:
         logger.warning(f"broker meetings summary failed: {e}")
         return "Couldn't fetch your visits right now — please try again in a moment."
     if not rows:
-        return "📋 You have no upcoming visits scheduled right now."
-    lines = ["📋 *Your upcoming visits:*"]
+        return "You have no upcoming visits scheduled right now."
+    lines = ["*Upcoming visits*"]
     for m in rows:
         lead = m.get("leads") or {}
         nm = lead.get("name") or "Customer"
         ph = lead.get("phone") or ""
         status = (m.get("status") or "").lower()
-        tag = "✅" if status == "confirmed" else "⏳"
+        mark = "✓" if status == "confirmed" else "·"
         prop = _property_label(m.get("property_id"))
-        lines.append(f"{tag} *{_fmt_when(m.get('scheduled_at'))}* — {nm} ({ph})\n     🏠 {prop}")
+        lines.append(f"{mark} *{_fmt_when(m.get('scheduled_at'))}* — {nm} ({ph})\n   {prop}")
     return "\n".join(lines)
 
 
 def _broker_help_menu() -> str:
-    return ("👋 *Here's what I can do for you*\n"
+    return ("*What I can do*\n"
             "• *meetings* — your upcoming visits\n"
             "• *stats* — leads, listings & visit numbers\n"
             "• *show new leads* / *who is negotiating* / *find Ravi* — search your pipeline\n"
             "• *move Ravi to negotiating* / *put 9876543210 on hold* — move a lead\n"
-            "• *ask Ravi if he's free Saturday 5pm* — I ask & auto-reschedule if he says yes\n"
+            "• *ask Ravi if he's free Saturday 5pm* — I ask & auto-reschedule if he agrees\n"
             "• Reply *YES* / *NO* to a visit request I send you\n"
             "• *reschedule 9876543210 to Friday 5pm*\n"
             "• *message Ravi: I'll call you this evening* — I text them + loop you on replies\n"
             "• *add 2 BHK flat in Gomti Nagar, 45 lakh, 1100 sqft, lift & parking*\n\n"
-            "Or just talk to me normally — I'll help. 🏠")
+            "Or just tell me what you need in your own words.")
 
 
 def _broker_stats() -> str:
@@ -239,14 +239,14 @@ def _broker_stats() -> str:
     except Exception:
         visits = None
 
-    parts = ["📊 *Your dashboard*"]
+    parts = ["*Your numbers*"]
     if leads is not None:
-        parts.append(f"👥 Leads (customers): *{leads}*")
+        parts.append(f"• Leads: *{leads}*")
     if props is not None:
-        parts.append(f"🏠 Live listings: *{props}*")
+        parts.append(f"• Live listings: *{props}*")
     if visits is not None:
-        parts.append(f"📅 Upcoming visits: *{visits}*")
-    parts.append("\nType *meetings* for the visit details.")
+        parts.append(f"• Upcoming visits: *{visits}*")
+    parts.append("\nType *meetings* for details.")
     return "\n".join(parts)
 
 
@@ -342,7 +342,7 @@ def forward_customer_reply_to_broker(broker_phone: str, session_id: str,
     name = ((requirements.get("_profile") or {}).get("name")) or "A customer"
     ch = {"whatsapp": "WhatsApp", "telegram": "Telegram", "web": "the website"}.get(
         _channel_of(session_id), "chat")
-    body = (f"💬 *{name}* replied on {ch}:\n“{text[:600]}”\n\n"
+    body = (f"*{name}* replied on {ch}:\n“{text[:600]}”\n\n"
             f"Reply *message {name}: …* to answer them, or handle it from the dashboard.")
     try:
         _send(broker_phone, body)
@@ -519,7 +519,7 @@ _STAGE_PATTERNS = [
     (r"visit\s*schedul|schedul|book(ed)?\s*(a\s*)?visit|for (a )?visit", "visit", "Visit Scheduled"),
     (r"negotiat", "negotiating", "Negotiating"),
     (r"\bwon\b|closed|deal done|sold|finali[sz]ed|booked the deal", "won", "Won"),
-    (r"on\s*hold|\bhold\b|waiting|pause|paused|not now", "waiting", "On Hold"),
+    (r"on\s*hold|\bhold\b|waiting|pause|paused|not now|back\s*burner|park (him|her|them|it)", "waiting", "On Hold"),
     (r"lost|not interested|\bdead\b|drop(ped)?", "lost", "Lost"),
     (r"contact(ed)?|called|reached out|spoke", "contacted", "Contacted"),
     (r"\bnew\b|fresh|reset", "new", "New"),
@@ -609,8 +609,8 @@ def _broker_move_lead(text: str, reply_context_id: str | None = None, broker_pho
         if ok:
             if broker_phone:
                 _mark_relay_open(lead.get("session_id"), broker_phone)
-            extra = f"\n💬 I've messaged {nm} on {channel} — I'll forward their reply."
-    return f"✅ Moved *{nm}* → *{lbl}*.{extra}"
+            extra = f"\nMessaged {nm} on {channel} — I'll forward their reply."
+    return f"Moved *{nm}* → *{lbl}*.{extra}"
 
 
 def _broker_search_leads(text: str):
@@ -629,14 +629,19 @@ def _broker_search_leads(text: str):
         q = q.ilike("phone", f"%{mph.group(0)}%")
     else:
         cleaned = re.sub(
-            r"\b(show|list|search|find|who|which|give|me|see|display|all|for|leads?|customers?|"
-            r"clients?|buyers?|pipeline|in|is|are|the|my|status|stage|new|contacted|visit\w*|"
-            r"schedul\w*|site|met|negotiat\w*|won|closed|sold|hold|waiting|pause\w*|lost|on|"
-            r"look\s?up|lookup)\b",
+            r"\b(show|list|search|find|who'?s?|which|whom|give|gimme|me|see|display|all|any(one|body)?|"
+            r"for|leads?|customers?|clients?|buyers?|people|person|pipeline|in|is|are|am|do|does|we|have|"
+            r"the|my|our|a|an|status|stage|come|coming|came|today|now|still|currently|please|pls|kindly|"
+            r"deciding|thinking|price|new|contacted|visit\w*|schedul\w*|site|met|negotiat\w*|won|closed|"
+            r"sold|hold|waiting|pause\w*|lost|on|back|burner|look\s?up|lookup)\b",
             " ", text, flags=re.I)
         name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z ]", " ", cleaned)).strip()
-        if len(name) >= 2:
+        # Only treat it as a name if it's short & name-like (1-2 words) — otherwise it's
+        # just leftover phrasing and we should rely on the stage filter (or list all).
+        if 2 <= len(name) <= 40 and 1 <= len(name.split()) <= 2:
             q = q.ilike("name", f"%{name}%")
+        else:
+            name = ""
     try:
         rows = q.execute().data or []
     except Exception as e:
@@ -645,7 +650,7 @@ def _broker_search_leads(text: str):
     title = name or (mph.group(0) if mph else None) or lbl or "All leads"
     if not rows:
         return f"No leads found for *{title}*."
-    head = f"🔎 *{title}* ({len(rows)}):"
+    head = f"*{title}* ({len(rows)})"
     lines = [head]
     for r in rows[:15]:
         area = r.get("preferred_area") or ""
@@ -722,8 +727,8 @@ def _broker_ask_customer_time(text: str, reply_context_id: str | None, broker_ph
     except Exception as e:
         logger.debug(f"pending ask save failed: {e}")
 
-    return (f"✅ Asked *{nm}* on {channel} if *{when}* works. "
-            f"I'll auto-reschedule and confirm both of you the moment they say yes.")
+    return (f"Asked *{nm}* on {channel} if *{when}* works. "
+            f"I'll auto-reschedule and confirm both of you the moment they agree.")
 
 
 def handle_customer_reschedule_reply(conv, text: str, ask: dict):
@@ -747,7 +752,7 @@ def handle_customer_reschedule_reply(conv, text: str, ask: dict):
     if decision == "no" and not gave_time:
         conv.requirements.pop("_pending_reschedule_ask", None)
         if broker_phone:
-            _send(broker_phone, f"❌ *{nm}* can't make *{proposed_when}*: “{text[:200]}”. "
+            _send(broker_phone, f"*{nm}* can't make *{proposed_when}*: “{text[:200]}”. "
                                 f"Reply *ask {nm} if free <another time>* to try again.")
         return ("No problem — I'll let our consultant know and we'll find a time that suits you. "
                 "Feel free to suggest one here. 🌿")
@@ -778,10 +783,36 @@ def handle_customer_reschedule_reply(conv, text: str, ask: dict):
         except Exception as e:
             logger.error(f"auto-reschedule update_meeting failed: {e}")
     if broker_phone:
-        _send(broker_phone, f"✅ *{nm}* confirmed — visit set for *{use_when}*. "
+        _send(broker_phone, f"*{nm}* confirmed — visit set for *{use_when}*. "
                             f"It's on the calendar; both of you are notified.")
     return (f"Perfect — your visit is confirmed for *{use_when}*. "
             f"Our consultant will see you then! 🌿")
+
+
+def _classify_broker_intent(text: str) -> str:
+    """LLM intent router — catches natural phrasings the keyword rules miss."""
+    from agent.llm_client import complete
+    import json
+    try:
+        js = complete([
+            {"role": "system", "content": (
+                "Classify a real-estate broker's WhatsApp message into ONE intent. Return ONLY "
+                "JSON {\"intent\":\"...\"}. Intents:\n"
+                "meetings — their upcoming visits/appointments\n"
+                "stats — counts of leads/listings/visits\n"
+                "search — show/find/list leads or customers (by stage or name)\n"
+                "move — change a customer's pipeline stage (put on hold / back burner, mark won/lost, "
+                "negotiating, contacted, site visited…)\n"
+                "ask — ask a customer whether a time works, to reschedule a visit\n"
+                "message — send/relay a message to a customer\n"
+                "add_property — add a new listing\n"
+                "chat — anything else / a general question\n"
+                "Pick the single best fit.")},
+            {"role": "user", "content": text},
+        ], temperature=0, max_tokens=24, json_mode=True)
+        return (json.loads(js).get("intent") or "chat").strip().lower()
+    except Exception:
+        return "chat"
 
 
 def _broker_assistant_llm(broker_phone: str, text: str) -> str:
@@ -865,7 +896,30 @@ def handle_broker_command(broker_phone: str, text: str, reply_context_id: str | 
         relayed = _broker_message_customer(t, reply_context_id, broker_phone)
         if relayed is not None:
             return relayed
-    # Anything else — talk to them like a real assistant.
+
+    # Keyword rules didn't catch it — ask the LLM what the broker wants, then act.
+    intent = _classify_broker_intent(t)
+    if intent == "meetings":
+        return _broker_meetings_summary()
+    if intent == "stats":
+        return _broker_stats()
+    if intent == "search":
+        return _broker_search_leads(t)
+    if intent == "move":
+        r = _broker_move_lead(t, reply_context_id, broker_phone)
+        if r is not None:
+            return r
+    if intent == "ask":
+        r = _broker_ask_customer_time(t, reply_context_id, broker_phone)
+        if r is not None:
+            return r
+    if intent == "message":
+        r = _broker_message_customer(t, reply_context_id, broker_phone)
+        if r is not None:
+            return r
+    if intent == "add_property":
+        return _broker_add_property_from_text(t, broker_phone)
+    # Genuinely conversational — reply like a real assistant.
     return _broker_assistant_llm(broker_phone, t)
 
 

@@ -80,7 +80,7 @@ def run_due_followups() -> dict:
                 nm = it.get("customer_name") or "the customer"
                 ph = it.get("customer_phone") or ""
                 note = it.get("note") or "follow up with them"
-                msg = (f"⏰ *Reminder*\nYou planned to {note} — *{nm}*"
+                msg = (f"*Reminder* — you planned to {note}: *{nm}*"
                        + (f" ({ph})" if ph else "") + ".\n\n"
                        f"Reply *message {nm}: …* and I'll text them for you, "
                        f"or just give them a call.")
