@@ -527,6 +527,27 @@ _STAGE_PATTERNS = [
 _STAGE_LABELS = {"new": "New", "contacted": "Contacted", "visit": "Visit Scheduled",
                  "met": "Site Visited", "negotiating": "Negotiating", "won": "Won",
                  "waiting": "On Hold", "lost": "Lost"}
+# Warm nudges we send the customer when they reach an engagement stage.
+_STAGE_MSG = {
+    "met": ("Hi{f} 👋 Hope you liked the property you visited! If you have any questions "
+            "or want to move ahead, just reply here — I'm happy to help. 🌿"),
+    "negotiating": ("Hi{f} 👋 Great that you're interested! Our consultant is working out the "
+                    "best possible price for you and will be in touch shortly. Reply here anytime. 🌿"),
+}
+
+
+def stage_change_nudge(session_id, phone, name, status, broker_phone=None):
+    """Message the customer on their channel when moved to an engagement stage.
+    Returns (ok, channel) or None."""
+    if status not in _STAGE_MSG or not (session_id or phone):
+        return None
+    nm = name or ""
+    first = nm.split()[0] if nm and nm.lower() != "the customer" else ""
+    body = _STAGE_MSG[status].format(f=(" " + first) if first else "")
+    ok, channel = notify_customer(session_id, phone, body)
+    if ok and broker_phone:
+        _mark_relay_open(session_id, broker_phone)
+    return (ok, channel) if ok else None
 _MOVE_VERB_RE = re.compile(
     r"\b(move|shift|put|mark|set|change|drag|reassign|update)\b", re.I)
 _SEARCH_VERB_RE = re.compile(
@@ -593,23 +614,12 @@ def _broker_move_lead(text: str, reply_context_id: str | None = None, broker_pho
         return "I couldn't update that just now — please try again."
     nm = lead.get("name") or "the customer"
 
-    # Stage-change auto-message: on the two engagement stages, nudge the customer on
-    # their own channel and loop the broker in on their reply.
-    _STAGE_MSG = {
-        "met": ("Hi{f} 👋 Hope you liked the property you visited! If you have any questions "
-                "or want to move ahead, just reply here — I'm happy to help. 🌿"),
-        "negotiating": ("Hi{f} 👋 Great that you're interested! Our consultant is working out the "
-                        "best possible price for you and will be in touch shortly. Reply here anytime. 🌿"),
-    }
+    # Stage-change auto-message on the engagement stages.
     extra = ""
-    if st in _STAGE_MSG and (lead.get("session_id") or lead.get("phone")):
-        first = (nm.split()[0] if nm and nm != "the customer" else "")
-        body = _STAGE_MSG[st].format(f=(" " + first) if first else "")
-        ok, channel = notify_customer(lead.get("session_id"), lead.get("phone"), body)
-        if ok:
-            if broker_phone:
-                _mark_relay_open(lead.get("session_id"), broker_phone)
-            extra = f"\nMessaged {nm} on {channel} — I'll forward their reply."
+    res = stage_change_nudge(lead.get("session_id"), lead.get("phone"), nm, st, broker_phone)
+    if res:
+        _ok, channel = res
+        extra = f"\nMessaged {nm} on {channel} — I'll forward their reply."
     return f"Moved *{nm}* → *{lbl}*.{extra}"
 
 

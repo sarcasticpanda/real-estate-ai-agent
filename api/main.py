@@ -82,9 +82,14 @@ async def _start_background_scheduler():
                 await asyncio.to_thread(run_due_followups)
             except Exception as e:
                 logger.debug(f"followup scheduler tick failed: {e}")
+            try:
+                from notifications.visit_reminders import run_visit_reminders
+                await asyncio.to_thread(run_visit_reminders)
+            except Exception as e:
+                logger.debug(f"visit-reminder tick failed: {e}")
             await asyncio.sleep(60)
     asyncio.create_task(_loop())
-    logger.info("Background follow-up scheduler started")
+    logger.info("Background scheduler started (follow-ups + visit reminders)")
 
 
 # ── Chat endpoint ────────────────────────────────────────────────────────────
@@ -1750,19 +1755,27 @@ async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
     if req.status not in PIPELINE_STAGES:
         raise HTTPException(status_code=400, detail="Invalid pipeline stage")
     try:
+        from database.supabase_client import get_client
+        rows = get_client().table("leads").select("name,status,session_id,phone").eq("id", lead_id).limit(1).execute().data
+        prev = (rows[0].get("status") if rows else None)
+        lead = rows[0] if rows else {}
+
         update_lead_status(lead_id, req.status, req.notes)
-        # Notify the broker on WhatsApp that this lead moved (they asked to be looped in).
-        try:
-            from database.supabase_client import get_client
-            from notifications.whatsapp_notifier import _send
-            from agent.broker_confirmation import _STAGE_LABELS
-            rows = get_client().table("leads").select("name").eq("id", lead_id).limit(1).execute().data
-            nm = (rows[0].get("name") if rows else None) or "A lead"
-            bph = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE")
-            if bph:
-                _send(bph, f"*{nm}* moved to *{_STAGE_LABELS.get(req.status, req.status)}* (via dashboard).")
-        except Exception as _e:
-            logger.debug(f"lead-move WA notify skipped: {_e}")
+
+        # Only act on a REAL change — stops the double "moved to X" pings when a drag fires twice.
+        if prev != req.status:
+            try:
+                from notifications.whatsapp_notifier import _send
+                from agent.broker_confirmation import _STAGE_LABELS, stage_change_nudge
+                nm = lead.get("name") or "A lead"
+                label = _STAGE_LABELS.get(req.status, req.status)
+                bph = os.environ.get("BROKER_WHATSAPP_PHONE") or os.environ.get("WHATSAPP_BROKER_PHONE")
+                if bph:
+                    _send(bph, f"Got it — *{nm}* is now in *{label}*.")
+                # Parity with the WhatsApp move: nudge the customer on engagement stages.
+                stage_change_nudge(lead.get("session_id"), lead.get("phone"), nm, req.status, bph)
+            except Exception as _e:
+                logger.debug(f"lead-move notify skipped: {_e}")
         return {"ok": True}
     except Exception as e:
         logger.error(f"broker_update_lead error: {e}")
