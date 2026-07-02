@@ -746,8 +746,8 @@ async function load(){
   const st=document.getElementById('f-status').value;
   const r=await fetch('/broker/meetings/api?token='+encodeURIComponent(t)+(st?'&status='+st:''));
   const d=await r.json(); const ms=d.meetings||[];
-  document.getElementById('count').textContent=ms.length+' meetings';
-  if(!ms.length){document.getElementById('mtgs').innerHTML='<div class="empty"><div class="empty-icon">📅</div><p>No meetings yet.</p></div>';return;}
+  document.getElementById('count').textContent=ms.length+(ms.length===1?' meeting':' meetings');
+  if(!ms.length){document.getElementById('mtgs').innerHTML='<div class="empty"><div class="empty-icon"><i class="ph ph-calendar-blank"></i></div><p>No meetings yet.</p></div>';return;}
   const STATUS_COLOR={'confirmed':'badge-won','pending':'badge-new','rescheduled':'badge-visit','cancelled':'badge-lost'};
   document.getElementById('mtgs').innerHTML='<div class="card"><table class="table"><thead><tr><th>Buyer</th><th>Phone</th><th>Area</th><th>Scheduled</th><th>Status</th><th>Actions</th></tr></thead><tbody>'
     +ms.map(m=>{
@@ -755,11 +755,11 @@ async function load(){
       const phone=(m.buyer_phone||'').replace(/[^0-9]/g,'');
       const bs='font-size:11px;padding:4px 9px;border:0;border-radius:8px;cursor:pointer;margin-right:4px';
       const pending=(m.status==='pending'||m.status==='rescheduled');
-      const actions=(pending?`<button style="${bs};background:#16a34a;color:#fff" onclick="confirmMtg('${m.id}')">✓ Confirm</button><button style="${bs};background:#ef4444;color:#fff" onclick="declineMtg('${m.id}')">✕ Decline</button>`:'')
+      const actions=(pending?`<button class="btn btn-success" style="font-size:11px;padding:5px 11px;margin-right:5px" onclick="confirmMtg('${m.id}')">Confirm</button><button class="btn btn-danger" style="font-size:11px;padding:5px 11px;margin-right:5px" onclick="declineMtg('${m.id}')">Decline</button>`:'')
         +`<button class="btn btn-ghost" style="font-size:11px;padding:4px 9px" onclick="reschedule('${m.id}')">Reschedule</button>`;
       return `<tr>
         <td><b>${m.buyer_name||'Unknown'}</b></td>
-        <td><a href="https://wa.me/91${phone}" target="_blank" style="color:#059669;font-weight:600">${m.buyer_phone||'—'}</a></td>
+        <td><a href="https://wa.me/91${phone}" target="_blank" style="color:var(--brand);font-weight:600">${m.buyer_phone||'—'}</a></td>
         <td>${m.buyer_area||'—'}</td>
         <td>${dt}</td>
         <td><span class="badge ${STATUS_COLOR[m.status]||'badge-wait'}">${m.status}</span></td>
@@ -770,7 +770,7 @@ async function load(){
 async function confirmMtg(id){
   if(!confirm('Confirm this visit? The buyer will be notified and it will be added to your calendar.'))return;
   const r=await fetch('/broker/meetings/'+id+'/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok()})});
-  const d=await r.json(); if(d.ok){toast('Confirmed'+(d.when?' for '+d.when:'')+' — buyer notified ✅');load();} else toast('Error: '+(d.detail||'unknown'),'false');
+  const d=await r.json(); if(d.ok){toast('Confirmed'+(d.when?' for '+d.when:'')+' — buyer notified');load();} else toast('Error: '+(d.detail||'unknown'),'false');
 }
 async function declineMtg(id){
   if(!confirm('Decline this visit? The buyer will be asked to pick another time.'))return;
@@ -788,7 +788,7 @@ async function reschedule(id){
 load();
 </script>"""
     return _broker_page("Meetings & Visits", content, scripts=scripts,
-        hdr_extra='<a href="/broker/pipeline" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">🎯 Pipeline</a>')
+        hdr_extra='<a href="/broker/pipeline" class="btn btn-ghost" style="font-size:12px;padding:7px 14px"><i class="ph ph-funnel"></i> Pipeline</a>')
 
 
 # ── Property image upload ─────────────────────────────────────────────────────
@@ -973,7 +973,9 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 async def shared_css():
     from fastapi.responses import Response
     css = (_TEMPLATES_DIR / "shared.css").read_text(encoding="utf-8")
-    return Response(content=css, media_type="text/css")
+    # Revalidate every load so UI updates aren't stuck behind a stale browser cache.
+    return Response(content=css, media_type="text/css",
+                    headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1667,6 +1669,9 @@ function render(){
     document.getElementById('cnt-'+s).textContent=_leads.filter(l=>l.status===s).length;
   });
   _leads.forEach(l=>document.getElementById('col-'+(l.status||'new')).appendChild(makeCard(l)));
+  // Subtle placeholder for empty columns so the board never looks broken.
+  STAGES.forEach(s=>{const col=document.getElementById('col-'+s);
+    if(!col.children.length)col.innerHTML='<div class="kempty">Drop a lead here</div>';});
 }
 function makeCard(l){
   const c=document.createElement('div');c.className='klcard';c.draggable=true;
@@ -1710,6 +1715,8 @@ loadPipe();
   border-bottom:3px solid var(--col-color,#0f7a52);display:flex;justify-content:space-between}
 .kcnt{background:#e2e8f0;border-radius:99px;padding:1px 8px;font-size:11px}
 .kcards{padding:8px;flex:1;min-height:80px}
+.kempty{border:1.5px dashed #d9d3c4;border-radius:8px;padding:16px 8px;text-align:center;
+  color:#a39c8a;font-size:11.5px;margin-top:2px}
 .klcard{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;
   margin-bottom:8px;cursor:grab;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .klcard:active{cursor:grabbing}
@@ -2138,7 +2145,7 @@ async def broker_edit_page(property_id: str):
 <label class="field-label">Description</label><textarea id="e-desc" class="input" style="height:80px"></textarea>
 <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
 <button class="btn btn-primary" onclick="save()">Save Changes</button>
-<a href="/broker/images/{pid}" class="btn btn-ghost">📷 Manage Photos</a>
+<a href="/broker/images/{pid}" class="btn btn-ghost"><i class="ph ph-camera"></i> Manage Photos</a>
 <button class="btn btn-danger" onclick="del()">Delete Property</button>
 </div>
 <div id="e-result" style="margin-top:10px;font-size:13px"></div>
@@ -2184,7 +2191,7 @@ async function del(){{
 loadProp();
 </script>"""
     return _broker_page(f"Edit Property", content, active="LIST", scripts=scripts,
-        hdr_extra=f'<a href="/broker/images/{pid}" class="btn btn-ghost" style="font-size:12px;padding:7px 14px">📷 Photos</a>')
+        hdr_extra=f'<a href="/broker/images/{pid}" class="btn btn-ghost" style="font-size:12px;padding:7px 14px"><i class="ph ph-camera"></i> Photos</a>')
 
 
 @app.get("/broker/listings", response_class=HTMLResponse)
@@ -2211,7 +2218,7 @@ async function load(){
   const d=await r.json();
   let ps=(d.properties||[]).filter(p=>(!st||p.status===st)&&(!ar||((p.area_name||'').toLowerCase().includes(ar.toLowerCase()))));
   document.getElementById('count').textContent=ps.length+' properties';
-  if(!ps.length){document.getElementById('props').innerHTML='<div class="empty"><div class="empty-icon">🏠</div><p>No properties found.</p></div>';return;}
+  if(!ps.length){document.getElementById('props').innerHTML='<div class="empty"><div class="empty-icon"><i class="ph ph-house-line"></i></div><p>No properties found.</p></div>';return;}
   document.getElementById('props').innerHTML='<div class="card"><table class="table"><thead><tr><th>Property</th><th>Area</th><th>Price</th><th>Status</th><th>Images</th><th>Actions</th></tr></thead><tbody>'
     +ps.map(p=>`<tr>
       <td><b>${p.bhk||''}${p.bhk?' BHK ':''} ${p.property_type||''}</b><br><span style="font-size:11px;color:#94a3b8">${p.id.replace('rag_property_','')}</span></td>
