@@ -116,7 +116,7 @@ def _fmt_when(iso: str) -> str:
 
 
 def _broker_meetings_summary() -> str:
-    """List the broker's upcoming (non-cancelled) visits with customer details."""
+    """List the broker's upcoming (non-cancelled) visits with customer + property."""
     from database.supabase_client import get_client
     from datetime import datetime, timezone
     try:
@@ -137,26 +137,229 @@ def _broker_meetings_summary() -> str:
         ph = lead.get("phone") or ""
         status = (m.get("status") or "").lower()
         tag = "✅" if status == "confirmed" else "⏳"
-        lines.append(f"{tag} {_fmt_when(m.get('scheduled_at'))} — {nm} ({ph})")
+        prop = _property_label(m.get("property_id"))
+        lines.append(f"{tag} *{_fmt_when(m.get('scheduled_at'))}* — {nm} ({ph})\n     🏠 {prop}")
     return "\n".join(lines)
 
 
+def _broker_help_menu() -> str:
+    return ("👋 *Here's what I can do for you*\n"
+            "• *meetings* — your upcoming visits\n"
+            "• *stats* — leads, listings & visit numbers\n"
+            "• Reply *YES* / *NO* to a visit request I send you\n"
+            "• *reschedule 9876543210 to Friday 5pm*\n"
+            "• *message Ravi: I'll call you this evening*\n"
+            "• *add 2 BHK flat in Gomti Nagar, 45 lakh, 1100 sqft, lift & parking*\n\n"
+            "Or just talk to me normally — I'll help. 🏠")
+
+
+def _broker_stats() -> str:
+    """Live counts across the business — grounded in the DB, never invented."""
+    from database.supabase_client import get_client
+    from datetime import datetime, timezone
+    c = get_client()
+
+    def _count(table, **filters):
+        try:
+            q = c.table(table).select("id", count="exact")
+            for k, v in filters.items():
+                q = q.eq(k, v)
+            return q.execute().count
+        except Exception:
+            return None
+
+    leads = _count("leads")
+    props = _count("properties", status="available")
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        visits = (c.table("meetings").select("id", count="exact")
+                  .gte("scheduled_at", now).neq("status", "cancelled").execute().count)
+    except Exception:
+        visits = None
+
+    parts = ["📊 *Your dashboard*"]
+    if leads is not None:
+        parts.append(f"👥 Leads (customers): *{leads}*")
+    if props is not None:
+        parts.append(f"🏠 Live listings: *{props}*")
+    if visits is not None:
+        parts.append(f"📅 Upcoming visits: *{visits}*")
+    parts.append("\nType *meetings* for the visit details.")
+    return "\n".join(parts)
+
+
+def _find_customer_phone(target: str):
+    """Resolve a customer by 10-digit phone or by (fuzzy) name → (phone10, name)."""
+    from database.supabase_client import get_client
+    digits = re.sub(r"\D", "", target or "")
+    if len(digits) >= 10:
+        return digits[-10:], None
+    name = (target or "").strip()
+    if not name:
+        return None, None
+    try:
+        rows = (get_client().table("leads").select("name,phone,created_at")
+                .ilike("name", f"%{name}%").order("created_at", desc=True)
+                .limit(1).execute().data) or []
+        if rows:
+            ph = re.sub(r"\D", "", rows[0].get("phone") or "")[-10:]
+            return (ph or None), rows[0].get("name")
+    except Exception:
+        pass
+    return None, None
+
+
+def _broker_message_customer(text: str):
+    """Broker asks us to relay a message to a customer. Returns reply str, or None
+    if we can't confidently act (so the caller falls back to conversation)."""
+    import json
+    from agent.llm_client import complete
+    try:
+        js = complete([
+            {"role": "system", "content": (
+                "A real-estate broker wants to send a message to one of their customers. "
+                "Extract it. Return ONLY JSON: {\"target\":\"the customer's name or phone\","
+                "\"message\":\"the exact message to send them, rewritten in first person from the broker\"}. "
+                "If the broker is NOT asking to message a customer (e.g. asking you a question), "
+                "return {\"target\":\"\",\"message\":\"\"}.")},
+            {"role": "user", "content": text},
+        ], temperature=0, max_tokens=160, json_mode=True)
+        data = json.loads(js)
+    except Exception:
+        data = {}
+    target = (data.get("target") or "").strip()
+    message = (data.get("message") or "").strip()
+    if not target or not message:
+        return None
+    phone, name = _find_customer_phone(target)
+    if not phone:
+        return (f"I couldn't find a customer called *{target}*. "
+                "Try their number — e.g. *message 9876543210: I'll call you this evening*.")
+    from notifications.whatsapp_notifier import _send
+    first = (name or "").split()[0] if name else ""
+    body = (f"Hi{(' ' + first) if first else ''} 👋 A message from your Riya property consultant:\n\n"
+            f"{message}")
+    ok = _send(phone, body)
+    if ok:
+        return f"✅ Sent to *{name or phone}*:\n_{message}_"
+    return (f"I couldn't deliver to *{name or phone}* on WhatsApp right now — WhatsApp only lets us "
+            "message someone within 24 h of their last message. You may need to call them directly.")
+
+
+def _broker_add_property_from_text(text: str, broker_phone: str) -> str:
+    """Broker adds a listing in natural language → parsed → created & made live."""
+    import json
+    from agent.llm_client import complete
+    try:
+        js = complete([
+            {"role": "system", "content": (
+                "Extract a property listing from a broker's message. Return ONLY JSON with keys: "
+                "property_type (one of: Flat, Independent House, Villa, Builder Floor, Plot, Shop, Office), "
+                "bhk (integer or null), price_inr (integer rupees — convert '45 lakh'->4500000, "
+                "'1.2 cr'->12000000), area_sqft (number or null), "
+                "furnishing (Furnished|Semi-Furnished|Unfurnished or null), "
+                "address (the locality/area text, e.g. 'Gomti Nagar'), city (default 'Lucknow'), "
+                "amenities (comma-separated string or null). Use null when a field isn't stated.")},
+            {"role": "user", "content": text},
+        ], temperature=0, max_tokens=250, json_mode=True)
+        data = json.loads(js)
+    except Exception:
+        data = {}
+    ptype = data.get("property_type")
+    price = data.get("price_inr")
+    addr = data.get("address")
+    if not ptype or not price or not addr:
+        return ("To add a listing I need at least the type, price and area — e.g.\n"
+                "*Add 2 BHK flat in Gomti Nagar, 45 lakh, 1100 sqft, semi-furnished, lift and parking*")
+    fields = {
+        "property_type": ptype,
+        "bhk": data.get("bhk"),
+        "price_inr": int(price),
+        "area_sqft": data.get("area_sqft"),
+        "furnishing": data.get("furnishing"),
+        "address": addr,
+        "city": data.get("city") or "Lucknow",
+        "amenities": data.get("amenities"),
+        "broker_phone": broker_phone,
+    }
+    try:
+        from broker.upload_handler import create_property_from_fields
+        result = create_property_from_fields(fields, broker_id=f"wa_{broker_phone}")
+    except Exception as e:
+        logger.error(f"broker WA add-property failed: {e}")
+        return "Something went wrong adding that listing. Please try the dashboard → Add Property."
+    if result.get("ok"):
+        label = _property_label(result.get("property_id"))
+        return (f"✅ Added *{label}* — it's live for buyers now.\n"
+                "Add photos any time from the dashboard → My Listings.")
+    return f"Couldn't add it: {result.get('error', 'please check the details and try again')}"
+
+
+def _broker_assistant_llm(broker_phone: str, text: str) -> str:
+    """Conversational broker assistant — replaces the old canned greeting."""
+    from agent.llm_client import complete
+    system = (
+        "You are Riya, the WhatsApp assistant for a real-estate BROKER (your teammate, not a buyer) "
+        "in Lucknow. Help them run their business. Reply in a warm, short WhatsApp style "
+        "(1-3 sentences, minimal emoji). When relevant, tell them the exact command to use:\n"
+        "• 'meetings' — upcoming visits\n"
+        "• 'stats' — leads, listings, visits\n"
+        "• Reply YES/NO to a visit request I send\n"
+        "• 'reschedule <buyer phone> to <day time>'\n"
+        "• 'message <name/phone>: <text>' — I'll text that customer for you\n"
+        "• 'add <bhk> <type> in <area>, <price>, <sqft>, <furnishing>, <amenities>' — I'll list it\n"
+        "You handle real-estate tasks only — you cannot generate images or do unrelated things; "
+        "say so briefly and steer back. Never invent numbers; if asked for counts, tell them to type "
+        "'stats' or 'meetings'."
+    )
+    try:
+        return complete(
+            [{"role": "system", "content": system}, {"role": "user", "content": text}],
+            temperature=0.5, max_tokens=200,
+        )
+    except Exception:
+        return _broker_help_menu()
+
+
+# Intent signals for the broker command router
+_STATS_RE = re.compile(
+    r"\b(stats?|statistics|numbers|overview|dashboard|performance)\b", re.I)
+_HOWMANY_RE = re.compile(r"\b(how many|number of|count|total)\b", re.I)
+_BIZ_NOUN_RE = re.compile(
+    r"\b(customer|lead|buyer|client|propert|listing|flat|home|visit|meeting|booking)", re.I)
+_MEETINGS_RE = re.compile(
+    r"\b(meetings?|my visits?|appointments?|bookings?|upcoming|agenda|schedule)\b", re.I)
+_HELP_RE = re.compile(r"\b(help|menu|commands?|what can you|options?)\b", re.I)
+_ADD_PROP_RE = re.compile(
+    r"\b(add|list|create|post|put up|register)\b.{0,20}\b(propert|listing|flat|villa|plot|house|home|bhk|shop|office)\b", re.I)
+_MSG_VERB_RE = re.compile(
+    r"\b(message|msg|text|tell|notify|relay|drop (a|him|her|them)|let .* know|send (a )?(message|msg|text|note))\b", re.I)
+_ASK_SELF_RE = re.compile(r"\b(tell|inform|remind|show|let|give) me\b", re.I)
+
+
 def handle_broker_command(broker_phone: str, text: str) -> str:
-    """The broker messaged us something that isn't a YES/NO confirmation reply."""
-    t = (text or "").lower().strip()
-    if re.search(r"\b(meetings?|schedule|appointments?|my visits?|bookings?|today|upcoming|agenda)\b", t):
+    """The broker messaged something that isn't a YES/NO confirmation reply.
+    Routes to a real capability, else answers conversationally via the LLM."""
+    t = (text or "").strip()
+    tl = t.lower()
+    if not tl:
+        return _broker_help_menu()
+
+    if _MEETINGS_RE.search(tl):
         return _broker_meetings_summary()
-    if re.search(r"\b(help|menu|commands?|what can you|options?)\b", t):
-        return ("👋 *Broker menu*\n"
-                "• *meetings* — your upcoming visits\n"
-                "• Reply *YES* / *NO* to a visit request I send you\n"
-                "• Reschedule: *RESCHEDULE <buyer phone> to <day time>*\n"
-                "  e.g. RESCHEDULE 9876543210 to Friday 5pm\n\n"
-                "I'll message you here whenever a customer wants to visit. 🏠")
-    # Default greeting/acknowledgement — broker, not buyer.
-    return ("Hi! 👋 You're set up as our property consultant. I'll message you here whenever a "
-            "customer wants to visit — just reply *YES* or *NO*.\n"
-            "Type *meetings* to see your upcoming visits, or *help* for options.")
+    if _STATS_RE.search(tl) or (_HOWMANY_RE.search(tl) and _BIZ_NOUN_RE.search(tl)):
+        return _broker_stats()
+    if _HELP_RE.search(tl):
+        return _broker_help_menu()
+    if _ADD_PROP_RE.search(tl):
+        return _broker_add_property_from_text(t, broker_phone)
+    # Relay a message to a customer — only when it's clearly to someone else (not "tell me …")
+    if _MSG_VERB_RE.search(tl) and not _ASK_SELF_RE.search(tl):
+        relayed = _broker_message_customer(t)
+        if relayed is not None:
+            return relayed
+    # Anything else — talk to them like a real assistant.
+    return _broker_assistant_llm(broker_phone, t)
 
 
 def ask_broker_availability(
