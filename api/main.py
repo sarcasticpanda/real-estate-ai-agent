@@ -323,7 +323,9 @@ async def my_properties(authorization: str = Header(default="")):
     phone = cust.get("phone")
     if phone:
         digits = "".join(ch for ch in phone if ch.isdigit())[-10:]
-        leads = c.table("leads").select("id").ilike("phone", f"%{digits}%").execute().data or []
+        # Exact 10-digit match — a substring (ilike %digits%) could surface another
+        # customer's visits whose number merely contains these digits (IDOR).
+        leads = c.table("leads").select("id").eq("phone", digits).execute().data or []
         lead_ids = [l["id"] for l in leads]
         if lead_ids:
             mts = (c.table("meetings").select("*").in_("lead_id", lead_ids)
@@ -520,11 +522,13 @@ async def get_properties(
 ):
     from rag.retriever import retrieve
 
+    limit = max(1, min(limit, 50))          # clamp to prevent unbounded queries
+    query = (query or "")[:200]             # cap query length
     requirements = {
-        "city": city,
+        "city": (city or "Lucknow")[:60],
         "bhk": bhk,
         "max_budget_cr": max_budget_cr,
-        "area": area,
+        "area": (area or None) and area[:60],
     }
     results = retrieve(query or f"property in {city}", requirements, top_k=limit)
     return {"count": len(results), "results": [r["data"] for r in results]}
@@ -532,14 +536,23 @@ async def get_properties(
 
 # ── n8n webhook endpoints ─────────────────────────────────────────────────────
 
+def _check_n8n_secret(secret: str | None):
+    """These webhooks mutate leads/meetings — require a shared secret."""
+    configured = os.environ.get("N8N_WEBHOOK_SECRET", "")
+    if not configured or not secret or not hmac.compare_digest(secret, configured):
+        raise HTTPException(status_code=403, detail="Invalid or missing webhook secret")
+
+
 class LeadWebhook(BaseModel):
     lead_id: str
     status: str
     notes: str = None
+    secret: str = ""
 
 
 @app.post("/webhook/n8n/lead")
 async def lead_webhook(payload: LeadWebhook):
+    _check_n8n_secret(payload.secret)
     update_lead_status(payload.lead_id, payload.status, payload.notes)
     return {"ok": True}
 
@@ -550,10 +563,12 @@ class MeetingWebhook(BaseModel):
     property_id: str
     scheduled_at: str
     duration_minutes: int = 60
+    secret: str = ""
 
 
 @app.post("/webhook/n8n/meeting")
 async def meeting_webhook(payload: MeetingWebhook):
+    _check_n8n_secret(payload.secret)
     from database.supabase_client import get_client
 
     meeting = save_meeting({

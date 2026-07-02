@@ -23,14 +23,20 @@ import jwt  # PyJWT
 
 logger = logging.getLogger(__name__)
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-insecure-change-me")
+_JWT_DEFAULT = "dev-insecure-change-me"
+JWT_SECRET = os.environ.get("JWT_SECRET", _JWT_DEFAULT)
+if JWT_SECRET == _JWT_DEFAULT:
+    logger.warning("JWT_SECRET is unset — using an INSECURE default. Set JWT_SECRET in the "
+                   "environment; anyone can otherwise forge customer sessions.")
 JWT_ALGO = "HS256"
 JWT_TTL_DAYS = 30
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
 
 # In-memory OTP store (single uvicorn worker): email -> (code, expires_at)
 _otp_store: dict[str, tuple[str, float]] = {}
-_OTP_TTL = 600  # 10 minutes
+_otp_attempts: dict[str, int] = {}   # email -> wrong-code attempts (brute-force guard)
+_OTP_TTL = 600       # 10 minutes
+_OTP_MAX_TRIES = 5   # lock the code after this many wrong guesses
 
 
 # ── JWT sessions ──────────────────────────────────────────────────────────────
@@ -65,6 +71,7 @@ def request_otp(email: str) -> bool:
         return False
     code = f"{random.randint(0, 999999):06d}"
     _otp_store[email] = (code, time.time() + _OTP_TTL)
+    _otp_attempts[email] = 0  # reset the brute-force counter on a fresh code
     try:
         from notifications.email_notifier import _send
         html = (f"<div style='font-family:sans-serif'><p>Hi,</p>"
@@ -87,10 +94,18 @@ def verify_otp(email: str, code: str) -> bool:
     real, exp = rec
     if time.time() > exp:
         _otp_store.pop(email, None)
+        _otp_attempts.pop(email, None)
+        return False
+    # Brute-force guard: invalidate the code after too many wrong guesses.
+    if _otp_attempts.get(email, 0) >= _OTP_MAX_TRIES:
+        _otp_store.pop(email, None)
+        _otp_attempts.pop(email, None)
         return False
     if (code or "").strip() != real:
+        _otp_attempts[email] = _otp_attempts.get(email, 0) + 1
         return False
     _otp_store.pop(email, None)  # single-use
+    _otp_attempts.pop(email, None)
     return True
 
 

@@ -21,24 +21,58 @@ logger = logging.getLogger(__name__)
 
 # Maps a broker-notification WhatsApp message-id → the customer it was about, so when
 # the broker *replies to* that message ("inform him I'll call this evening") we relay to
-# the right person on their own channel. In-memory (single uvicorn worker), bounded.
+# the right person on their own channel. Kept in memory for speed AND persisted to disk
+# so it survives restarts/redeploys (single uvicorn worker).
+import json as _json
+from pathlib import Path as _Path
+import threading as _threading
+
 _NOTIFY_CTX: "OrderedDict[str, dict]" = OrderedDict()
 _NOTIFY_CTX_MAX = 800
+_NOTIFY_CTX_TTL = 36 * 3600  # a reply beyond ~1.5 days almost certainly isn't about this
+_CTX_FILE = _Path(__file__).resolve().parents[1] / "runtime" / "notify_ctx.json"
+_CTX_LOCK = _threading.Lock()
+
+
+def _ctx_load() -> None:
+    try:
+        data = _json.loads(_CTX_FILE.read_text(encoding="utf-8"))
+        for k, v in data.items():
+            _NOTIFY_CTX[k] = v
+    except Exception:
+        pass
+
+
+def _ctx_persist() -> None:
+    try:
+        _CTX_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CTX_FILE.write_text(_json.dumps(dict(_NOTIFY_CTX), ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"notify_ctx persist failed: {e}")
+
+
+_ctx_load()
 
 
 def remember_broker_notification(wamid: str, session_id, phone, name) -> None:
     if not wamid:
         return
-    _NOTIFY_CTX[wamid] = {"session_id": session_id, "phone": phone, "name": name}
-    _NOTIFY_CTX.move_to_end(wamid)
-    while len(_NOTIFY_CTX) > _NOTIFY_CTX_MAX:
-        _NOTIFY_CTX.popitem(last=False)
+    with _CTX_LOCK:
+        _NOTIFY_CTX[wamid] = {"session_id": session_id, "phone": phone, "name": name,
+                              "ts": datetime.now(timezone.utc).timestamp()}
+        _NOTIFY_CTX.move_to_end(wamid)
+        while len(_NOTIFY_CTX) > _NOTIFY_CTX_MAX:
+            _NOTIFY_CTX.popitem(last=False)
+        _ctx_persist()
 
 
 def context_customer(wamid: str):
     """→ (session_id, phone10, name) for the customer a replied-to notification was about."""
     ctx = _NOTIFY_CTX.get(wamid or "")
     if not ctx:
+        return None
+    ts = ctx.get("ts")
+    if ts and (datetime.now(timezone.utc).timestamp() - ts) > _NOTIFY_CTX_TTL:
         return None
     ph = re.sub(r"\D", "", ctx.get("phone") or "")[-10:] or None
     return ctx.get("session_id"), ph, ctx.get("name")
@@ -281,6 +315,38 @@ def notify_customer(session_id: str, phone: str, message: str) -> tuple[bool, st
     return False, "their channel"
 
 
+def _mark_relay_open(session_id: str, broker_phone: str) -> None:
+    """Flag a customer's session so their next reply is looped back to the broker."""
+    if not session_id or not broker_phone:
+        return
+    from database.supabase_client import get_session, save_session
+    try:
+        s = get_session(session_id)
+        req = s.get("requirements") or {}
+        req["_relay_broker"] = broker_phone
+        save_session(session_id, s.get("messages") or [], req, s.get("stage") or "discovery")
+    except Exception as e:
+        logger.debug(f"mark relay open failed: {e}")
+
+
+def forward_customer_reply_to_broker(broker_phone: str, session_id: str,
+                                     requirements: dict, text: str) -> None:
+    """Two-way loop: after the broker messaged a customer, forward the customer's
+    reply back to the broker on WhatsApp so nothing is missed."""
+    if not broker_phone or not text:
+        return
+    from notifications.whatsapp_notifier import _send
+    name = ((requirements.get("_profile") or {}).get("name")) or "A customer"
+    ch = {"whatsapp": "WhatsApp", "telegram": "Telegram", "web": "the website"}.get(
+        _channel_of(session_id), "chat")
+    body = (f"💬 *{name}* replied on {ch}:\n“{text[:600]}”\n\n"
+            f"Reply *message {name}: …* to answer them, or handle it from the dashboard.")
+    try:
+        _send(broker_phone, body)
+    except Exception as e:
+        logger.debug(f"forward customer reply failed: {e}")
+
+
 def _resolve_customer(target: str, reply_context_id: str | None = None):
     """Resolve who the broker means → (session_id, phone10, name).
     Priority: explicit phone → explicit name → the message they REPLIED to →
@@ -372,6 +438,10 @@ def _broker_message_customer(text: str, reply_context_id: str | None = None,
                 + (" — WhatsApp only allows messaging within 24 h of their last message."
                    if channel == "WhatsApp" else ".")
                 + " You may need to contact them directly.")
+
+    # Loop the broker in on whatever the customer replies next.
+    if broker_phone:
+        _mark_relay_open(session_id, broker_phone)
 
     # If the broker committed to a time, remind them then (so they don't forget).
     reminder_line = ""

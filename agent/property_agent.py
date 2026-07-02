@@ -587,6 +587,18 @@ def process_message(session_id: str, user_message: str, platform: str = "web",
                 profile["phone"] = digits[-10:]
                 conv.requirements["_profile"] = profile
 
+    # ── Two-way loop: if the broker recently messaged this customer, forward the
+    # customer's reply back to the broker so nothing slips through. ───────────
+    if (user_message not in ("__init__",) and not user_message.startswith("__init_prop__:")):
+        _relay_broker = conv.requirements.get("_relay_broker")
+        if _relay_broker:
+            try:
+                from agent.broker_confirmation import forward_customer_reply_to_broker
+                forward_customer_reply_to_broker(_relay_broker, session_id,
+                                                 conv.requirements, user_message)
+            except Exception as _e:
+                logger.debug(f"relay-to-broker skipped: {_e}")
+
     # ── Guardrail (all platforms/stages): inappropriate or abusive input ─────
     # Runs before onboarding AND routing so it can't be smuggled in as a "name"
     # or slip through the clarify flow. Decline politely, do not store, do not engage.
