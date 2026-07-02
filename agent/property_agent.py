@@ -1330,12 +1330,19 @@ def _extract_email(text: str) -> str | None:
 
 
 def _build_ics(dt, title: str, description: str, location: str, attendee_email: str | None = None) -> str:
-    """A minimal valid .ics invite (floating local time) with a 1-hour reminder."""
-    from datetime import timedelta
+    """A minimal valid .ics invite in absolute UTC (so the time is correct on any
+    device's calendar, not just IST ones) with a 1-hour reminder."""
+    from datetime import timedelta, timezone as _tz
     import uuid as _uuid
-    start = dt.strftime("%Y%m%dT%H%M%S")
-    end = (dt + timedelta(hours=1)).strftime("%Y%m%dT%H%M%S")
-    stamp = dt.strftime("%Y%m%dT%H%M%S")
+
+    def _u(x):
+        if x.tzinfo is None:                    # naive → assume the IST wall-clock we build in
+            x = x.replace(tzinfo=IST)
+        return x.astimezone(_tz.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    start = _u(dt)
+    end = _u(dt + timedelta(hours=1))
+    stamp = _u(dt)
     uid = f"{_uuid.uuid4().hex}@riya-realestate"
     att = f"ATTENDEE;CN={attendee_email};RSVP=TRUE:mailto:{attendee_email}\r\n" if attendee_email else ""
     return (
@@ -1361,6 +1368,7 @@ def _gcal_link(dt, title: str, details: str = "", location: str = "Lucknow") -> 
     q = urllib.parse.urlencode({
         "action": "TEMPLATE", "text": title, "dates": f"{start}/{end}",
         "details": details, "location": location,
+        "ctz": "Asia/Kolkata",   # interpret the wall-clock time as IST for every viewer
     })
     return f"https://calendar.google.com/calendar/render?{q}"
 
@@ -1461,20 +1469,28 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
         fields["scheduled_at"] = dt.isoformat()
 
     meeting_id = pending.get("meeting_id")
+    save_ok = False
     try:
         if meeting_id:                      # reschedule → update the same meeting
             update_meeting(meeting_id, fields)
+            save_ok = True
         else:
             fields["lead_id"] = pending.get("lead_id")
             saved = save_meeting(fields)
             meeting_id = (saved or {}).get("id")
+            save_ok = bool(meeting_id)
     except Exception as e:
         logger.error(f"save/update meeting failed: {e}")
+        save_ok = False
 
-    if meeting_id:
-        conv.requirements["_last_meeting_id"] = meeting_id
-        conv.requirements["_last_lead_id"] = pending.get("lead_id")
+    # If the save failed, DON'T clear _pending_meeting — keep the context so the buyer
+    # can just resend the time and we retry, instead of silently losing the booking.
+    if not save_ok:
+        return (f"Sorry {name}, I couldn't lock that visit in just now. "
+                f"Could you resend the day and time? I'll try again right away.")
 
+    conv.requirements["_last_meeting_id"] = meeting_id
+    conv.requirements["_last_lead_id"] = pending.get("lead_id")
     _finish()
 
     # ── Ping the broker via WhatsApp to confirm they're free ─────────────────
