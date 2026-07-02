@@ -76,6 +76,7 @@ app.add_middleware(
 async def _start_background_scheduler():
     """In-app scheduler — fires broker follow-up reminders when due (no external cron)."""
     async def _loop():
+        await asyncio.sleep(45)   # let the app settle so a redeploy doesn't re-fire reminders
         while True:
             try:
                 from notifications.followups import run_due_followups

@@ -82,8 +82,13 @@ def run_visit_reminders() -> dict:
             if mins <= 0:
                 continue
 
+            now_ist = now.astimezone(IST)
+            dt_ist = dt.astimezone(IST)
             stages = []
-            if now.astimezone(IST).date() == dt.astimezone(IST).date():
+            # Morning-of "good morning" reminder: only during real morning hours (7–11am IST)
+            # and only for visits still comfortably ahead (skips 3am spam and imminent visits,
+            # which the 1-hour reminder already covers).
+            if now_ist.date() == dt_ist.date() and 7 <= now_ist.hour < 11 and mins > 90:
                 stages.append("day_of")
             if 0 < mins <= 65:
                 stages.append("hour")
@@ -100,7 +105,10 @@ def run_visit_reminders() -> dict:
             full = _full_str(dt)
 
             for stage in stages:
-                key = f"{mid}:{stage}"
+                # Dedup by person + visit-day + stage (not meeting id) so duplicate meeting
+                # rows for the same buyer/day can't produce duplicate reminders.
+                who = (ph or m.get("lead_id") or mid)
+                key = f"{who}:{dt_ist.date().isoformat()}:{stage}"
                 if key in sent:
                     continue
                 if stage == "day_of":
