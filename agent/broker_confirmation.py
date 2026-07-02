@@ -207,6 +207,7 @@ def _broker_help_menu() -> str:
             "• *stats* — leads, listings & visit numbers\n"
             "• *show new leads* / *who is negotiating* / *find Ravi* — search your pipeline\n"
             "• *move Ravi to negotiating* / *put 9876543210 on hold* — move a lead\n"
+            "• *ask Ravi if he's free Saturday 5pm* — I ask & auto-reschedule if he says yes\n"
             "• Reply *YES* / *NO* to a visit request I send you\n"
             "• *reschedule 9876543210 to Friday 5pm*\n"
             "• *message Ravi: I'll call you this evening* — I text them + loop you on replies\n"
@@ -545,7 +546,7 @@ def _resolve_lead(text: str, reply_context_id: str | None = None):
     c = get_client()
     m = re.search(r"\d{10}", re.sub(r"\D", " ", text))
     if m:
-        rows = (c.table("leads").select("id,name,phone,status").ilike("phone", f"%{m.group(0)}%")
+        rows = (c.table("leads").select("id,name,phone,status,session_id").ilike("phone", f"%{m.group(0)}%")
                 .order("created_at", desc=True).limit(1).execute().data) or []
         if rows:
             return rows[0]
@@ -561,21 +562,21 @@ def _resolve_lead(text: str, reply_context_id: str | None = None):
         # try the whole phrase, then individual tokens (longest first) — "Ravi back" → "Ravi"
         candidates = [name] + sorted({w for w in name.split() if len(w) >= 2}, key=len, reverse=True)
         for cand in candidates:
-            rows = (c.table("leads").select("id,name,phone,status").ilike("name", f"%{cand}%")
+            rows = (c.table("leads").select("id,name,phone,status,session_id").ilike("name", f"%{cand}%")
                     .order("created_at", desc=True).limit(1).execute().data) or []
             if rows:
                 return rows[0]
     if reply_context_id:
         ctx = context_customer(reply_context_id)
         if ctx and ctx[1]:
-            rows = (c.table("leads").select("id,name,phone,status").ilike("phone", f"%{ctx[1]}%")
+            rows = (c.table("leads").select("id,name,phone,status,session_id").ilike("phone", f"%{ctx[1]}%")
                     .limit(1).execute().data) or []
             if rows:
                 return rows[0]
     return None
 
 
-def _broker_move_lead(text: str, reply_context_id: str | None = None):
+def _broker_move_lead(text: str, reply_context_id: str | None = None, broker_phone: str | None = None):
     """Broker moves a customer to a pipeline stage. Returns reply, or None if no stage."""
     st, lbl = _parse_stage(text)
     if not st:
@@ -591,10 +592,25 @@ def _broker_move_lead(text: str, reply_context_id: str | None = None):
         logger.error(f"broker move lead failed: {e}")
         return "I couldn't update that just now — please try again."
     nm = lead.get("name") or "the customer"
-    tip = ""
-    if st in ("met", "negotiating"):
-        tip = f"\nWant me to check in with them? Reply *message {nm}: …*"
-    return f"✅ Moved *{nm}* → *{lbl}*.{tip}"
+
+    # Stage-change auto-message: on the two engagement stages, nudge the customer on
+    # their own channel and loop the broker in on their reply.
+    _STAGE_MSG = {
+        "met": ("Hi{f} 👋 Hope you liked the property you visited! If you have any questions "
+                "or want to move ahead, just reply here — I'm happy to help. 🌿"),
+        "negotiating": ("Hi{f} 👋 Great that you're interested! Our consultant is working out the "
+                        "best possible price for you and will be in touch shortly. Reply here anytime. 🌿"),
+    }
+    extra = ""
+    if st in _STAGE_MSG and (lead.get("session_id") or lead.get("phone")):
+        first = (nm.split()[0] if nm and nm != "the customer" else "")
+        body = _STAGE_MSG[st].format(f=(" " + first) if first else "")
+        ok, channel = notify_customer(lead.get("session_id"), lead.get("phone"), body)
+        if ok:
+            if broker_phone:
+                _mark_relay_open(lead.get("session_id"), broker_phone)
+            extra = f"\n💬 I've messaged {nm} on {channel} — I'll forward their reply."
+    return f"✅ Moved *{nm}* → *{lbl}*.{extra}"
 
 
 def _broker_search_leads(text: str):
@@ -613,9 +629,10 @@ def _broker_search_leads(text: str):
         q = q.ilike("phone", f"%{mph.group(0)}%")
     else:
         cleaned = re.sub(
-            r"\b(show|list|search|find|who|which|give|me|see|display|all|for|lead|leads|customer|"
-            r"client|pipeline|in|is|are|the|my|status|stage|new|contacted|visit\w*|schedul\w*|site|"
-            r"met|negotiat\w*|won|closed|sold|hold|waiting|pause\w*|lost|on|look\s?up|lookup)\b",
+            r"\b(show|list|search|find|who|which|give|me|see|display|all|for|leads?|customers?|"
+            r"clients?|buyers?|pipeline|in|is|are|the|my|status|stage|new|contacted|visit\w*|"
+            r"schedul\w*|site|met|negotiat\w*|won|closed|sold|hold|waiting|pause\w*|lost|on|"
+            r"look\s?up|lookup)\b",
             " ", text, flags=re.I)
         name = re.sub(r"\s+", " ", re.sub(r"[^A-Za-z ]", " ", cleaned)).strip()
         if len(name) >= 2:
@@ -639,6 +656,132 @@ def _broker_search_leads(text: str):
         lines.append(f"• *{r.get('name') or 'Unknown'}* ({r.get('phone') or ''})"
                      + (f" — {extra}" if extra else "") + bs)
     return "\n".join(lines)
+
+
+# ── One-shot "ask the customer & auto-reschedule if they say yes" ────────────
+_ASK_RE = re.compile(r"\b(ask|check with|check if|find out if|see if|confirm with)\b", re.I)
+_TIME_SIGNAL = re.compile(
+    r"\d|morning|evening|afternoon|tonight|tomorrow|today|noon|night|"
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|am|pm|o'?clock", re.I)
+
+
+def _upcoming_meeting_for_lead(lead_id: str):
+    """The lead's next non-cancelled meeting (id) if any."""
+    from database.supabase_client import get_client
+    from datetime import datetime, timezone
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = (get_client().table("meetings").select("id,scheduled_at,property_id")
+                .eq("lead_id", lead_id).neq("status", "cancelled")
+                .gte("scheduled_at", now).order("scheduled_at").limit(1).execute().data) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
+def _broker_ask_customer_time(text: str, reply_context_id: str | None, broker_phone: str | None):
+    """Broker: 'ask Ravi if he's free Saturday 5pm'. We message the customer, and when
+    they reply YES we auto-reschedule. Returns a reply, or None if we can't act."""
+    from agent.property_agent import _parse_visit_time
+    lead = _resolve_lead(text, reply_context_id)
+    if not lead:
+        return ("Who should I ask? Name them or reply to their card — e.g.\n"
+                "*ask Ravi if he's free Saturday 5pm*.")
+    dt, when = _parse_visit_time(text)
+    if not dt:
+        return f"What time should I check with *{lead.get('name') or 'them'}*? e.g. *ask them if free Saturday 5pm*."
+
+    mtg = _upcoming_meeting_for_lead(lead["id"])
+    meeting_id = (mtg or {}).get("id")
+    session_id = lead.get("session_id")
+    phone = lead.get("phone")
+    nm = lead.get("name") or "there"
+    first = nm.split()[0] if nm != "there" else ""
+
+    ask_msg = (f"Hi{(' ' + first) if first else ''} 👋 Would *{when}* work for your property visit? "
+               f"Reply *YES* to confirm, or just tell me a better day/time. 🌿")
+    ok, channel = notify_customer(session_id, phone, ask_msg)
+    if not ok:
+        return f"I couldn't reach *{nm}* on {channel} right now — you may need to contact them directly."
+
+    # Remember the pending ask on the customer's session so their reply auto-reschedules.
+    from database.supabase_client import get_session, save_session
+    try:
+        s = get_session(session_id)
+        req = s.get("requirements") or {}
+        req["_pending_reschedule_ask"] = {
+            "proposed_when": when,
+            "proposed_dt": dt.isoformat(),
+            "meeting_id": meeting_id,
+            "lead_id": lead["id"],
+            "broker_phone": broker_phone,
+            "name": nm,
+        }
+        req["_relay_broker"] = broker_phone   # loop the broker in on whatever they say
+        save_session(session_id, s.get("messages") or [], req, s.get("stage") or "scheduling")
+    except Exception as e:
+        logger.debug(f"pending ask save failed: {e}")
+
+    return (f"✅ Asked *{nm}* on {channel} if *{when}* works. "
+            f"I'll auto-reschedule and confirm both of you the moment they say yes.")
+
+
+def handle_customer_reschedule_reply(conv, text: str, ask: dict):
+    """Customer replied to a broker's 'are you free at X?' ask. Interpret and act.
+    Returns a customer-facing reply (str) when handled, or None to fall through."""
+    from database.supabase_client import update_meeting
+    from notifications.whatsapp_notifier import _send
+    from agent.property_agent import _parse_visit_time
+
+    broker_phone = ask.get("broker_phone")
+    meeting_id = ask.get("meeting_id")
+    nm = ask.get("name") or "The customer"
+    proposed_when = ask.get("proposed_when")
+    proposed_dt = ask.get("proposed_dt")
+
+    decision = _broker_decision(text)          # reuse YES/NO detection
+    dt2, when2 = _parse_visit_time(text)
+    gave_time = dt2 is not None and _TIME_SIGNAL.search(text or "")
+
+    # Decline → tell the broker, stop here.
+    if decision == "no" and not gave_time:
+        conv.requirements.pop("_pending_reschedule_ask", None)
+        if broker_phone:
+            _send(broker_phone, f"❌ *{nm}* can't make *{proposed_when}*: “{text[:200]}”. "
+                                f"Reply *ask {nm} if free <another time>* to try again.")
+        return ("No problem — I'll let our consultant know and we'll find a time that suits you. "
+                "Feel free to suggest one here. 🌿")
+
+    # Confirmed (yes) or gave a concrete alternative time → reschedule.
+    use_dt, use_when = (dt2, when2) if gave_time else (None, proposed_when)
+    if not gave_time and decision != "yes":
+        return None  # ambiguous — let the normal agent handle it, keep the ask pending
+
+    from datetime import datetime
+    final_dt = None
+    if use_dt is not None:
+        final_dt = use_dt
+    elif proposed_dt:
+        try:
+            final_dt = datetime.fromisoformat(proposed_dt)
+        except Exception:
+            final_dt = None
+
+    conv.requirements.pop("_pending_reschedule_ask", None)
+    if meeting_id and final_dt:
+        try:
+            update_meeting(meeting_id, {
+                "scheduled_at": final_dt.isoformat(),
+                "status": "confirmed",
+                "notes": f"Customer confirmed via Riya for {use_when}",
+            })
+        except Exception as e:
+            logger.error(f"auto-reschedule update_meeting failed: {e}")
+    if broker_phone:
+        _send(broker_phone, f"✅ *{nm}* confirmed — visit set for *{use_when}*. "
+                            f"It's on the calendar; both of you are notified.")
+    return (f"Perfect — your visit is confirmed for *{use_when}*. "
+            f"Our consultant will see you then! 🌿")
 
 
 def _broker_assistant_llm(broker_phone: str, text: str) -> str:
@@ -696,14 +839,20 @@ def handle_broker_command(broker_phone: str, text: str, reply_context_id: str | 
         return _broker_meetings_summary()
     # Move a lead across the pipeline: "move Ravi to negotiating", "put X on hold"
     if _MOVE_VERB_RE.search(tl) and _parse_stage(tl)[0]:
-        moved = _broker_move_lead(t, reply_context_id)
+        moved = _broker_move_lead(t, reply_context_id, broker_phone)
         if moved is not None:
             return moved
-    # Search / list the pipeline: "show new leads", "who is negotiating", "find Ravi"
+    # Search / list the pipeline: "show new leads", "who is on negotiations", "find Ravi"
+    # (no trailing \b on the nouns — so plurals like customerS / negotiationS match)
     if re.search(r"\b(find|search|look\s?up|lookup)\b", tl) or (
             _SEARCH_VERB_RE.search(tl) and re.search(
-                r"\b(lead|leads|customer|client|pipeline|list|new|contacted|negotiat|won|hold|waiting|visit|lost)\b", tl)):
+                r"\b(lead|customer|client|pipeline|list|new|contacted|negotiat|won|hold|waiting|visit|lost)", tl)):
         return _broker_search_leads(t)
+    # Ask a customer to confirm a time → auto-reschedule when they say yes.
+    if _ASK_RE.search(tl) and _TIME_SIGNAL.search(tl):
+        asked = _broker_ask_customer_time(t, reply_context_id, broker_phone)
+        if asked is not None:
+            return asked
     if _STATS_RE.search(tl) or (_HOWMANY_RE.search(tl) and _BIZ_NOUN_RE.search(tl)):
         return _broker_stats()
     if _HELP_RE.search(tl):

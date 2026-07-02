@@ -587,6 +587,20 @@ def process_message(session_id: str, user_message: str, platform: str = "web",
                 profile["phone"] = digits[-10:]
                 conv.requirements["_profile"] = profile
 
+    # ── Smart reschedule: if the broker asked "are you free at X?", interpret the
+    # customer's reply here and auto-reschedule when they confirm. ────────────
+    if (user_message not in ("__init__",) and not user_message.startswith("__init_prop__:")):
+        _ask = conv.requirements.get("_pending_reschedule_ask")
+        if _ask:
+            try:
+                from agent.broker_confirmation import handle_customer_reschedule_reply
+                _r = handle_customer_reschedule_reply(conv, user_message, _ask)
+                if _r is not None:
+                    conv.save()
+                    return {"reply": _r, "properties": []}
+            except Exception as _e:
+                logger.debug(f"smart-reschedule reply skipped: {_e}")
+
     # ── Two-way loop: if the broker recently messaged this customer, forward the
     # customer's reply back to the broker so nothing slips through. ───────────
     if (user_message not in ("__init__",) and not user_message.startswith("__init_prop__:")):
