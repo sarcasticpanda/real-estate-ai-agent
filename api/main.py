@@ -1848,10 +1848,10 @@ async function loadDash(){
   document.getElementById('stats').innerHTML=`
     <div class="stat"><div class="stat-val">${a.leads_total||0}</div><div class="stat-lbl">Total Leads</div></div>
     <div class="stat"><div class="stat-val">${a.leads_this_week||0}</div><div class="stat-lbl">This Week</div></div>
-    <div class="stat"><div class="stat-val" style="color:#059669">${a.conversion_rate||0}%</div><div class="stat-lbl">Conversion</div></div>
+    <div class="stat"><div class="stat-val">${a.conversion_rate||0}%</div><div class="stat-lbl">Conversion</div></div>
     <div class="stat"><div class="stat-val">${a.properties_total||0}</div><div class="stat-lbl">Properties</div></div>
-    <div class="stat"><div class="stat-val" style="color:#059669">${a.properties_available||0}</div><div class="stat-lbl">Available</div></div>
-    <div class="stat"><div class="stat-val" style="color:#dc2626">${a.properties_sold||0}</div><div class="stat-lbl">Sold/Booked</div></div>
+    <div class="stat"><div class="stat-val">${a.properties_available||0}</div><div class="stat-lbl">Available</div></div>
+    <div class="stat"><div class="stat-val">${a.properties_sold||0}</div><div class="stat-lbl">Sold/Booked</div></div>
   `;
   const STATUS_COLOR={'new':'badge-new','contacted':'badge-new','visit':'badge-visit','won':'badge-won','lost':'badge-lost','waiting':'badge-wait','met':'badge-visit','negotiating':'badge-amber'};
   const rows=leads.slice(0,8).map(l=>`<tr>
@@ -2286,27 +2286,30 @@ async def broker_analytics_visual():
     content = """
 <div class="grid-3" id="kpis" style="margin-bottom:20px"></div>
 <div class="grid-2" id="charts">
-  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Lead Funnel</h3><canvas id="cFunnel" height="200"></canvas></div>
-  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Top Areas</h3><canvas id="cAreas" height="200"></canvas></div>
-  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">BHK Demand</h3><canvas id="cBhk" height="200"></canvas></div>
-  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">New Leads per Week</h3><canvas id="cWeekly" height="200"></canvas></div>
-  <div class="card card-body"><h3 style="font-size:13px;font-weight:700;margin-bottom:12px">Property Types</h3><canvas id="cTypes" height="200"></canvas></div>
+  <div class="card card-body"><div class="card-title">Lead Funnel</div><canvas id="cFunnel" height="200"></canvas></div>
+  <div class="card card-body"><div class="card-title">Top Areas</div><canvas id="cAreas" height="200"></canvas></div>
+  <div class="card card-body"><div class="card-title">BHK Demand</div><canvas id="cBhk" height="200"></canvas></div>
+  <div class="card card-body"><div class="card-title">New Leads per Week</div><canvas id="cWeekly" height="200"></canvas></div>
+  <div class="card card-body"><div class="card-title">Property Types</div><canvas id="cTypes" height="200"></canvas></div>
 </div>
 """
     scripts = """<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
-const C=['#0f7a52','#0891b2','#7c3aed','#d97706','#16a34a','#dc2626','#64748b','#ea580c'];
+// Cohesive emerald-led palette (no rainbow) to match the rest of the app.
+const C=['#0f7a52','#3fb984','#c8892a','#0b5c3d','#8d998f','#12211b','#e0b15e','#4a5a52'];
 async function loadAnalytics(){
   const t=tok();if(!t){document.getElementById('kpis').innerHTML='<p style="color:#94a3b8;grid-column:1/-1">Enter broker token in sidebar.</p>';return;}
   const r=await fetch('/api/broker/analytics/charts?token='+encodeURIComponent(t));
-  if(!r.ok){document.getElementById('kpis').innerHTML='<p style="color:#dc2626;grid-column:1/-1">Invalid token.</p>';return;}
+  if(!r.ok){document.getElementById('kpis').innerHTML='<p style="color:#c0492f;grid-column:1/-1">Invalid token.</p>';return;}
   const d=await r.json();
   const s=d.summary||{};
   document.getElementById('kpis').innerHTML=[
-    ['Total Leads',s.total_leads||0,'#0f7a52'],['Meetings',s.meetings||0,'#0891b2'],
-    ['Won',s.won||0,'#16a34a'],[`${s.conversion_pct||0}%`,'Conversion','#d97706'],
-    ['Properties',s.properties||0,'#334155'],['Available',s.available_props||0,'#059669'],
-  ].map(([v,l,c])=>`<div class="stat"><div class="stat-val" style="color:${c}">${v}</div><div class="stat-lbl">${l}</div></div>`).join('');
+    ['Total Leads',s.total_leads||0],['Meetings',s.meetings||0],
+    ['Won',s.won||0],['Conversion',`${s.conversion_pct||0}%`],
+    ['Properties',s.properties||0],['Available',s.available_props||0],
+  ].map(([label,val])=>`<div class="stat"><div class="stat-val">${val}</div><div class="stat-lbl">${label}</div></div>`).join('');
+  Chart.defaults.font.family="'General Sans',system-ui,sans-serif";
+  Chart.defaults.color='#4a5a52';
   const mk=(id,type,labels,data,lbl)=>new Chart(document.getElementById(id),{type,data:{labels,datasets:[{label:lbl||'',data,backgroundColor:type==='line'?C[0]+'33':C,borderColor:C[0],fill:type==='line',tension:.3}]},options:{plugins:{legend:{display:type==='doughnut',position:'right'}},scales:type!=='doughnut'?{y:{beginAtZero:true,ticks:{precision:0}}}:{}}});
   const f=d.funnel||[];mk('cFunnel','bar',f.map(x=>x.stage),f.map(x=>x.count));
   const a=d.top_areas||[];new Chart(document.getElementById('cAreas'),{type:'bar',data:{labels:a.map(x=>x.area),datasets:[{data:a.map(x=>x.count),backgroundColor:C}]},options:{indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{precision:0}}}}});
