@@ -1668,6 +1668,10 @@ function makeCard(l){
   c.innerHTML=`<div class="kl-name">${l.name||'Unknown'}</div>
     <div class="kl-phone">${l.phone||''}</div>
     <div class="kl-meta">${l.preferred_area||''} ${l.budget_max?'· ₹'+(l.budget_max/1e7).toFixed(1)+'Cr':''}</div>
+    <div class="kl-offer" onmousedown="event.stopPropagation()">
+      <input class="kl-in" placeholder="You offered" value="${(l.broker_offer||'').replace(/"/g,'&quot;')}" title="What you offered" onchange="saveOffer('${l.id}','broker_offer',this.value)">
+      <input class="kl-in" placeholder="They want" value="${(l.customer_offer||'').replace(/"/g,'&quot;')}" title="What the customer wants" onchange="saveOffer('${l.id}','customer_offer',this.value)">
+    </div>
     <div class="kl-btns">
       <a href="https://wa.me/91${phone}" target="_blank" class="kl-wa">WhatsApp</a>
       ${phone?`<a href="tel:${l.phone}" class="kl-call">Call</a>`:''}
@@ -1690,6 +1694,7 @@ document.querySelectorAll('.kcards').forEach(col=>{
   });
 });
 async function addNote(id,status){const txt=prompt('Add note:');if(!txt)return;await fetch('/broker/leads/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),status,notes:txt})});loadPipe();}
+async function saveOffer(id,field,val){try{const r=await fetch('/broker/leads/'+id+'/offer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:tok(),[field]:val})});const lead=_leads.find(l=>l.id===id);if(lead)lead[field]=val;if(r.ok){toast('Saved');}else{toast('Add the offer columns first','false');}}catch(e){toast('Could not save','false');}}
 loadPipe();
 </script>
 <style>
@@ -1704,7 +1709,12 @@ loadPipe();
 .klcard:active{cursor:grabbing}
 .kl-name{font-weight:700;font-size:13px;color:#0f172a}
 .kl-phone{font-size:12px;color:#059669;font-weight:600}
-.kl-meta{font-size:11px;color:#64748b;margin:3px 0 7px}
+.kl-meta{font-size:11px;color:#64748b;margin:3px 0 6px}
+.kl-offer{display:flex;gap:5px;margin:0 0 7px;cursor:default}
+.kl-in{flex:1;min-width:0;font-size:11px;padding:4px 7px;border:1px solid #e3dfd2;border-radius:6px;
+  background:#faf8f2;color:#12211b;outline:none}
+.kl-in::placeholder{color:#9aa79f}
+.kl-in:focus{border-color:#0f7a52;background:#fff;box-shadow:0 0 0 2px rgba(15,122,82,.12)}
 .kl-btns{display:flex;gap:5px;flex-wrap:wrap}
 .kl-btns a,.kl-btns button{font-size:11px;padding:3px 8px;border-radius:6px;cursor:pointer;
   border:1px solid #e2e8f0;background:#f8fafc;color:#334155;text-decoration:none}
@@ -1757,6 +1767,33 @@ async def broker_update_lead(lead_id: str, req: LeadStatusUpdate):
     except Exception as e:
         logger.error(f"broker_update_lead error: {e}")
         raise HTTPException(status_code=500, detail="Could not update lead")
+
+
+class LeadOffer(BaseModel):
+    token: str
+    broker_offer: str | None = None
+    customer_offer: str | None = None
+
+
+@app.post("/broker/leads/{lead_id}/offer")
+async def broker_update_offer(lead_id: str, req: LeadOffer):
+    """Website-only negotiation tracker: what the broker offered vs what the buyer wants."""
+    _check_broker_token(req.token)
+    from database.supabase_client import get_client
+    fields = {}
+    if req.broker_offer is not None:
+        fields["broker_offer"] = (req.broker_offer or "")[:120]
+    if req.customer_offer is not None:
+        fields["customer_offer"] = (req.customer_offer or "")[:120]
+    if not fields:
+        return {"ok": True}
+    try:
+        get_client().table("leads").update(fields).eq("id", lead_id).execute()
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"broker_update_offer error: {e}")
+        raise HTTPException(status_code=400,
+                            detail="Couldn't save — add the 'broker_offer'/'customer_offer' columns first.")
 
 
 class PropertySold(BaseModel):
