@@ -95,9 +95,21 @@ async def chat(req: ChatRequest):
             user_message=req.message,
             platform=req.platform,
         )
+        reply = result["reply"]
+        # Deliver any broker→customer messages queued for this (pull-based) web session.
+        try:
+            s = get_session(req.session_id)
+            rq = s.get("requirements") or {}
+            pend = rq.get("_broker_msgs") or []
+            if pend:
+                rq["_broker_msgs"] = []
+                save_session(req.session_id, s.get("messages") or [], rq, s.get("stage") or "discovery")
+                reply = "\n\n".join(pend) + (("\n\n" + reply) if reply else "")
+        except Exception as _e:
+            logger.debug(f"web broker-msg flush skipped: {_e}")
         return ChatResponse(
             session_id=req.session_id,
-            reply=result["reply"],
+            reply=reply,
             properties=result.get("properties", []),
         )
     except Exception as e:
@@ -2674,8 +2686,11 @@ async def whatsapp_inbound(request: Request, background_tasks: BackgroundTasks):
 
             if msg_type == "text":
                 text = msg.get("text", {}).get("body", "")
+                # When the broker *replies to* a specific message, WhatsApp gives us the
+                # quoted message id — we use it to know which customer they mean.
+                reply_ctx = (msg.get("context") or {}).get("id")
                 if text:
-                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text, msg_id, wa_name)
+                    background_tasks.add_task(_handle_whatsapp_message, sender, session_id, text, msg_id, wa_name, reply_ctx)
 
         return {"ok": True}
     except HTTPException:
@@ -2711,7 +2726,8 @@ def _wa_caption(card: dict) -> str:
 
 
 async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str,
-                                   msg_id: str | None = None, wa_name: str | None = None):
+                                   msg_id: str | None = None, wa_name: str | None = None,
+                                   reply_context_id: str | None = None):
     from notifications.whatsapp_notifier import _send, mark_read, send_image
 
     # Acknowledge instantly: blue ticks + "typing…" indicator while we work.
@@ -2729,8 +2745,9 @@ async def _handle_whatsapp_message(sender_phone: str, session_id: str, text: str
         )
         if is_configured_broker(sender_phone):
             if not handle_broker_reply(sender_phone, text):
-                # Not a YES/NO/reschedule reply — give a broker menu/ack, not the buyer flow.
-                _send(sender_phone, handle_broker_command(sender_phone, text))
+                # Not a YES/NO/reschedule reply — hand to the broker assistant (with the
+                # replied-to message context so 'inform him …' resolves correctly).
+                _send(sender_phone, handle_broker_command(sender_phone, text, reply_context_id))
             return
         # Non-broker: still let a pending confirmation match (defensive; returns False otherwise).
         if handle_broker_reply(sender_phone, text):

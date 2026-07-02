@@ -14,9 +14,34 @@ Pipeline:
 import logging
 import re
 import os
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# Maps a broker-notification WhatsApp message-id → the customer it was about, so when
+# the broker *replies to* that message ("inform him I'll call this evening") we relay to
+# the right person on their own channel. In-memory (single uvicorn worker), bounded.
+_NOTIFY_CTX: "OrderedDict[str, dict]" = OrderedDict()
+_NOTIFY_CTX_MAX = 800
+
+
+def remember_broker_notification(wamid: str, session_id, phone, name) -> None:
+    if not wamid:
+        return
+    _NOTIFY_CTX[wamid] = {"session_id": session_id, "phone": phone, "name": name}
+    _NOTIFY_CTX.move_to_end(wamid)
+    while len(_NOTIFY_CTX) > _NOTIFY_CTX_MAX:
+        _NOTIFY_CTX.popitem(last=False)
+
+
+def context_customer(wamid: str):
+    """→ (session_id, phone10, name) for the customer a replied-to notification was about."""
+    ctx = _NOTIFY_CTX.get(wamid or "")
+    if not ctx:
+        return None
+    ph = re.sub(r"\D", "", ctx.get("phone") or "")[-10:] or None
+    return ctx.get("session_id"), ph, ctx.get("name")
 
 # Natural-language YES / NO — brokers reply in sentences ("yes that works", "no sorry,
 # I'm tied up then"), not just a bare word. Decline is checked FIRST (see _broker_decision).
@@ -188,40 +213,131 @@ def _broker_stats() -> str:
     return "\n".join(parts)
 
 
-def _find_customer_phone(target: str):
-    """Resolve a customer by 10-digit phone or by (fuzzy) name → (phone10, name)."""
-    from database.supabase_client import get_client
-    digits = re.sub(r"\D", "", target or "")
-    if len(digits) >= 10:
-        return digits[-10:], None
-    name = (target or "").strip()
-    if not name:
-        return None, None
+# ── Multi-channel customer delivery ──────────────────────────────────────────
+# A customer's session_id tells us where to reach them:
+#   wa_<phone>  → WhatsApp     web_<id> → Website (queued, pull-based)
+#   <all digits> → Telegram chat_id
+_PRONOUN_RE = re.compile(
+    r"^\s*(him|her|them|it|that (guy|person|man|woman|one|customer|lead|client)|"
+    r"the (customer|buyer|lead|client|guy|person|man|woman|one)|"
+    r"this (customer|lead|person|one))\s*$", re.I)
+
+
+def _channel_of(session_id: str) -> str:
+    sid = (session_id or "").strip()
+    if sid.startswith("wa_"):
+        return "whatsapp"
+    if sid.startswith("web_"):
+        return "web"
+    if sid.isdigit():
+        return "telegram"
+    return "unknown"
+
+
+def _send_telegram(chat_id: str, text: str) -> bool:
+    import requests
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        return False
     try:
-        rows = (get_client().table("leads").select("name,phone,created_at")
-                .ilike("name", f"%{name}%").order("created_at", desc=True)
-                .limit(1).execute().data) or []
+        cid = int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json={"chat_id": cid, "text": text}, timeout=10)
+        return r.status_code == 200
+    except Exception as e:
+        logger.warning(f"Telegram relay failed: {e}")
+        return False
+
+
+def _queue_web_message(session_id: str, message: str) -> bool:
+    """Web is pull-based — stash the message so it's shown on the customer's next
+    message or page reload (process flushes _broker_msgs)."""
+    from database.supabase_client import get_session, save_session
+    try:
+        s = get_session(session_id)
+        req = s.get("requirements") or {}
+        q = req.get("_broker_msgs") or []
+        q.append(message)
+        req["_broker_msgs"] = q
+        save_session(session_id, s.get("messages") or [], req, s.get("stage") or "discovery")
+        return True
+    except Exception as e:
+        logger.warning(f"web queue failed: {e}")
+        return False
+
+
+def notify_customer(session_id: str, phone: str, message: str) -> tuple[bool, str]:
+    """Deliver a message to a customer on THEIR channel. Returns (ok, channel)."""
+    ch = _channel_of(session_id)
+    if ch == "telegram":
+        return _send_telegram(session_id, message), "Telegram"
+    if ch == "web":
+        return _queue_web_message(session_id, message), "the website"
+    # whatsapp, or unknown-but-we-have-a-phone
+    digits = re.sub(r"\D", "", phone or "")
+    if digits:
+        from notifications.whatsapp_notifier import _send
+        return _send(digits[-10:] if len(digits) >= 10 else digits, message), "WhatsApp"
+    return False, "their channel"
+
+
+def _resolve_customer(target: str, reply_context_id: str | None = None):
+    """Resolve who the broker means → (session_id, phone10, name).
+    Priority: explicit phone → explicit name → the message they REPLIED to →
+    (a bare pronoun with no reply context) give up so we can ask. We never guess
+    'the most recent lead'."""
+    from database.supabase_client import get_client
+    t = (target or "").strip()
+    digits = re.sub(r"\D", "", t)
+    c = get_client()
+
+    def _row(r):
+        return (r.get("session_id"),
+                re.sub(r"\D", "", r.get("phone") or "")[-10:] or None,
+                r.get("name"))
+
+    if len(digits) >= 10:                                   # explicit phone
+        ph = digits[-10:]
+        try:
+            rows = (c.table("leads").select("name,phone,session_id")
+                    .ilike("phone", f"%{ph}%").order("created_at", desc=True)
+                    .limit(1).execute().data) or []
+        except Exception:
+            rows = []
+        return _row(rows[0]) if rows else (None, ph, None)
+
+    if t and not _PRONOUN_RE.match(t):                      # explicit name
+        try:
+            rows = (c.table("leads").select("name,phone,session_id")
+                    .ilike("name", f"%{t}%").order("created_at", desc=True)
+                    .limit(1).execute().data) or []
+        except Exception:
+            rows = []
         if rows:
-            ph = re.sub(r"\D", "", rows[0].get("phone") or "")[-10:]
-            return (ph or None), rows[0].get("name")
-    except Exception:
-        pass
-    return None, None
+            return _row(rows[0])
+
+    if reply_context_id:                                    # the notification they replied to
+        ctx = context_customer(reply_context_id)
+        if ctx:
+            return ctx
+
+    return (None, None, None)
 
 
-def _broker_message_customer(text: str):
-    """Broker asks us to relay a message to a customer. Returns reply str, or None
-    if we can't confidently act (so the caller falls back to conversation)."""
+def _broker_message_customer(text: str, reply_context_id: str | None = None):
+    """Broker asks us to relay a message to a customer, on the customer's OWN channel
+    (WhatsApp / Telegram / website). Returns reply str, or None if it isn't a relay."""
     import json
     from agent.llm_client import complete
     try:
         js = complete([
             {"role": "system", "content": (
                 "A real-estate broker wants to send a message to one of their customers. "
-                "Extract it. Return ONLY JSON: {\"target\":\"the customer's name or phone\","
-                "\"message\":\"the exact message to send them, rewritten in first person from the broker\"}. "
-                "If the broker is NOT asking to message a customer (e.g. asking you a question), "
-                "return {\"target\":\"\",\"message\":\"\"}.")},
+                "Extract it. Return ONLY JSON: {\"target\":\"the customer's name or phone, or a "
+                "pronoun like 'him'/'her'/'them' if they didn't name anyone\","
+                "\"message\":\"the message to send, rewritten in first person from the broker to the "
+                "customer (e.g. 'I'll call you this evening')\"}. "
+                "If the broker is NOT asking to message a customer, return {\"target\":\"\",\"message\":\"\"}.")},
             {"role": "user", "content": text},
         ], temperature=0, max_tokens=160, json_mode=True)
         data = json.loads(js)
@@ -229,21 +345,26 @@ def _broker_message_customer(text: str):
         data = {}
     target = (data.get("target") or "").strip()
     message = (data.get("message") or "").strip()
-    if not target or not message:
+    if not message:
         return None
-    phone, name = _find_customer_phone(target)
-    if not phone:
-        return (f"I couldn't find a customer called *{target}*. "
-                "Try their number — e.g. *message 9876543210: I'll call you this evening*.")
-    from notifications.whatsapp_notifier import _send
+
+    session_id, phone, name = _resolve_customer(target, reply_context_id)
+    if not session_id and not phone:
+        return ("Who should I message? *Reply to* the customer's lead/visit message, "
+                "or name them — e.g.\n*message Ravi: I'll call you this evening* "
+                "or *tell 9876543210 …*")
+
     first = (name or "").split()[0] if name else ""
     body = (f"Hi{(' ' + first) if first else ''} 👋 A message from your Riya property consultant:\n\n"
             f"{message}")
-    ok = _send(phone, body)
+    ok, channel = notify_customer(session_id, phone, body)
+    who = name or phone or "them"
     if ok:
-        return f"✅ Sent to *{name or phone}*:\n_{message}_"
-    return (f"I couldn't deliver to *{name or phone}* on WhatsApp right now — WhatsApp only lets us "
-            "message someone within 24 h of their last message. You may need to call them directly.")
+        return f"✅ Sent to *{who}* on {channel}:\n_{message}_"
+    return (f"I couldn't reach *{who}* on {channel} right now"
+            + (" — WhatsApp only allows messaging within 24 h of their last message."
+               if channel == "WhatsApp" else ".")
+            + " You may need to contact them directly.")
 
 
 def _broker_add_property_from_text(text: str, broker_phone: str) -> str:
@@ -337,9 +458,10 @@ _MSG_VERB_RE = re.compile(
 _ASK_SELF_RE = re.compile(r"\b(tell|inform|remind|show|let|give) me\b", re.I)
 
 
-def handle_broker_command(broker_phone: str, text: str) -> str:
+def handle_broker_command(broker_phone: str, text: str, reply_context_id: str | None = None) -> str:
     """The broker messaged something that isn't a YES/NO confirmation reply.
-    Routes to a real capability, else answers conversationally via the LLM."""
+    Routes to a real capability, else answers conversationally via the LLM.
+    reply_context_id: the WhatsApp message the broker replied to (if any)."""
     t = (text or "").strip()
     tl = t.lower()
     if not tl:
@@ -353,9 +475,10 @@ def handle_broker_command(broker_phone: str, text: str) -> str:
         return _broker_help_menu()
     if _ADD_PROP_RE.search(tl):
         return _broker_add_property_from_text(t, broker_phone)
-    # Relay a message to a customer — only when it's clearly to someone else (not "tell me …")
-    if _MSG_VERB_RE.search(tl) and not _ASK_SELF_RE.search(tl):
-        relayed = _broker_message_customer(t)
+    # Relay a message to a customer. Treat it as a relay if it's clearly a message verb
+    # (not "tell me …"), OR the broker is replying to a customer's lead/visit notification.
+    if reply_context_id or (_MSG_VERB_RE.search(tl) and not _ASK_SELF_RE.search(tl)):
+        relayed = _broker_message_customer(t, reply_context_id)
         if relayed is not None:
             return relayed
     # Anything else — talk to them like a real assistant.
@@ -378,7 +501,7 @@ def ask_broker_availability(
     customer's details, the actual property, and that day's existing appointments.
     Stores a pending confirmation so we can match their reply. Returns True if WA sent.
     """
-    from notifications.whatsapp_notifier import _send
+    from notifications.whatsapp_notifier import _send_get_id
     from database.supabase_client import save_broker_confirmation, get_broker_by_phone
 
     prop_label = _property_label(property_id)
@@ -394,10 +517,13 @@ def ask_broker_availability(
         f"or just send a better time (e.g. _Friday 4pm_)."
     )
 
-    sent = _send(broker_phone, msg)
-    if not sent:
+    wamid = _send_get_id(broker_phone, msg)
+    if wamid is None:
         logger.warning(f"Could not send broker confirmation WA to {broker_phone}")
         return False
+    # So a broker who *replies* to this request can also relay to this buyer.
+    if wamid:
+        remember_broker_notification(wamid, buyer_session_id, buyer_phone, buyer_name)
 
     # Email the broker too (best-effort) so it's on record even if they miss WhatsApp.
     try:
@@ -549,13 +675,13 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
                             f"The buyer will be informed.{broker_calendar}")
         _send_broker_calendar_invite(broker_phone, buyer_name, proposed_when, proposed_dt, broker_gcal)
 
-        # WhatsApp + SMS + email the buyer
+        # Notify the buyer on THEIR channel (WhatsApp / Telegram / website) + SMS
         buyer_msg = (
             f"Great news, {buyer_name}! Your visit has been confirmed for *{proposed_when}*. "
             f"Our consultant will be there — see you!"
         )
+        notify_customer(buyer_sid, buyer_phone, buyer_msg)
         if buyer_phone:
-            _send(buyer_phone, buyer_msg)
             try:
                 from notifications.sms_notifier import send_visit_sms_buyer
                 send_visit_sms_buyer(buyer_phone, buyer_name, proposed_when)
@@ -588,10 +714,9 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
             })
         _prepare_buyer_whatsapp_reschedule(conf)
         _send(broker_phone, "Got it — I'll let the buyer know and ask them to pick another time.")
-        if buyer_phone:
-            _send(buyer_phone,
-                  f"Hi {buyer_name}, our consultant is busy at *{proposed_when}*. "
-                  "Could you suggest another day/time? I'll check availability right away.")
+        notify_customer(buyer_sid, buyer_phone,
+                        f"Hi {buyer_name}, our consultant is busy at *{proposed_when}*. "
+                        "Could you suggest another day/time? I'll check availability right away.")
         logger.info(f"Broker {broker_phone} declined {proposed_when}")
         return True
 
@@ -663,11 +788,10 @@ def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = N
         _send(broker_phone, "I couldn't save that new time. Please try again shortly.")
         return True
 
-    # Notify buyer via WhatsApp
-    if buyer_phone:
-        _send(buyer_phone,
-              f"Hi {buyer_name}, your property visit has been rescheduled to *{proposed_when}*. "
-              "Same property — see you there!")
+    # Notify buyer on their own channel
+    notify_customer(buyer_sid, buyer_phone,
+                    f"Hi {buyer_name}, your property visit has been rescheduled to *{proposed_when}*. "
+                    "Same property — see you there!")
 
     # Email buyer new .ics if we have their email
     if buyer_sid:

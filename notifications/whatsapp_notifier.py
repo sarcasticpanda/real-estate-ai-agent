@@ -26,14 +26,16 @@ PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
 ACCESS_TOKEN    = os.environ.get("WHATSAPP_ACCESS_TOKEN")
 
 
-def _send(to_phone: str, message: str) -> bool:
+def _send_get_id(to_phone: str, message: str) -> str | None:
     """
-    Send a plain text WhatsApp message.
+    Send a plain text WhatsApp message and return the sent message id (wamid),
+    or None on failure. On success but no id, returns "" (still truthy-ish for
+    'sent' checks via _send).
     to_phone: Indian number in format '919876543210' (91 + 10 digits, no +)
     """
     if not PHONE_NUMBER_ID or not ACCESS_TOKEN:
         logger.warning("WhatsApp not configured — WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_ACCESS_TOKEN missing")
-        return False
+        return None
 
     # Normalise number: strip +, spaces, dashes; ensure 91 prefix
     phone = to_phone.replace("+", "").replace(" ", "").replace("-", "")
@@ -62,13 +64,19 @@ def _send(to_phone: str, message: str) -> bool:
         )
         resp.raise_for_status()
         logger.info(f"WhatsApp sent to {phone}")
-        return True
+        wamid = ((resp.json().get("messages") or [{}])[0] or {}).get("id")
+        return wamid or ""
     except requests.HTTPError as e:
         logger.error(f"WhatsApp send failed ({resp.status_code}): {resp.text}")
-        return False
+        return None
     except Exception as e:
         logger.error(f"WhatsApp send error: {e}")
-        return False
+        return None
+
+
+def _send(to_phone: str, message: str) -> bool:
+    """Send a plain text WhatsApp message. Returns True if accepted by WhatsApp."""
+    return _send_get_id(to_phone, message) is not None
 
 
 def _normalize_phone(to_phone: str) -> str:
@@ -210,7 +218,16 @@ def notify_broker_whatsapp(lead: dict, requirements: dict, broker_phone: str | N
         f"⚡ Please call within 2 hours!\n"
         f"Lead ID: {lead.get('id', '')}"
     )
-    return _send(broker_phone, message)
+    wamid = _send_get_id(broker_phone, message)
+    # Remember which customer this alert was about, so if the broker *replies* to it
+    # ("inform him I'll call this evening") we relay to the right person + channel.
+    if wamid:
+        try:
+            from agent.broker_confirmation import remember_broker_notification
+            remember_broker_notification(wamid, lead.get("session_id"), phone, name)
+        except Exception:
+            pass
+    return wamid is not None
 
 
 def notify_buyer_whatsapp(buyer_phone: str, buyer_name: str, broker_name: str, broker_phone: str, area: str, bhk) -> bool:
