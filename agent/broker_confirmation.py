@@ -1116,11 +1116,11 @@ def handle_broker_reply(broker_phone: str, reply_text: str) -> bool:
         except Exception as _e:
             logger.debug(f"Google Calendar event skipped: {_e}")
 
-        # WhatsApp the broker confirmation
+        # WhatsApp the broker confirmation (calendar event is auto-added below +
+        # emailed as an invite — no need to dump a raw link into the chat).
         broker_gcal = _gcal_link(proposed_dt, "Property visit", f"Visit with {buyer_name}", "Lucknow")
-        broker_calendar = f"\nAdd it to your calendar: {broker_gcal}" if broker_gcal else ""
-        _send(broker_phone, f"Confirmed! I've booked the visit for *{proposed_when}*. "
-                            f"The buyer will be informed.{broker_calendar}")
+        _send(broker_phone, f"Confirmed — visit with *{buyer_name}* booked for *{proposed_when}*. "
+                            f"The buyer's been notified and it's on your calendar.")
         _send_broker_calendar_invite(broker_phone, buyer_name, proposed_when, proposed_dt, broker_gcal)
 
         # Notify the buyer on THEIR channel (WhatsApp / Telegram / website) + SMS
@@ -1253,11 +1253,9 @@ def handle_broker_reschedule(broker_phone: str, text: str, conf: dict | None = N
         except Exception as e:
             logger.warning(f"Could not email buyer on reschedule: {e}")
 
-    broker_gcal = _gcal_link(dt, "Property visit", f"Visit with {buyer_name}", "Lucknow")
     _send(broker_phone,
-          f"Done! Rescheduled to *{proposed_when}*. "
-          f"{buyer_name} has been notified on WhatsApp.\n"
-          f"Add it to your calendar: {broker_gcal}")
+          f"Done — rescheduled to *{proposed_when}*. "
+          f"{buyer_name} has been notified.")
     logger.info(f"Broker {broker_phone} rescheduled meeting {meeting_id} to {proposed_when}")
     return True
 
