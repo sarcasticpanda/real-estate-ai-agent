@@ -1528,14 +1528,18 @@ def _handle_scheduling(conv: ConversationManager, user_message: str, user_name: 
     conv.requirements["_last_visit_when"] = when
     conv.requirements["_last_gcal"] = gcal
     conv.requirements["_last_visit_dt"] = dt.isoformat() if dt else None
-    cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if gcal else ""
+    # Markdown links only render on the web chat; on WhatsApp/Telegram a "[text](url)"
+    # shows the raw long URL, so there we skip it and lean on the emailed .ics invite.
+    is_web = (getattr(conv, "platform", "web") or "web") == "web"
+    cal_line = f"\n\n📅 [Add to your calendar]({gcal})" if (gcal and is_web) else ""
+    sep = "  ·  " if cal_line else "\n\n"
 
     # Email + SMS confirmation
     if profile.get("email"):
         _send_visit_confirmation_email(profile.get("email"), name, when, area, gcal, dt)
-        cal_line += f"  ·  ✉️ invite sent to {profile['email']}"
+        cal_line += f"{sep}📅 Calendar invite sent to {profile['email']}"
     else:
-        cal_line += "  ·  ✉️ share your email for a calendar invite"
+        cal_line += f"{sep}📅 Share your email and I'll send you a calendar invite"
 
     # SMS confirmation (fires if buyer phone known + FAST2SMS_API_KEY set)
     try:
