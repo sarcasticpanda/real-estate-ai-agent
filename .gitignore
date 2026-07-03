@@ -39,3 +39,6 @@ client_secret*.json
 .playwright-mcp/
 *.png
 scratchpad/
+
+sampleimages/
+/*.jpeg

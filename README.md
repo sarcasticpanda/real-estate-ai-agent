@@ -4,8 +4,48 @@ Riya is a full-stack, **multi-channel** AI property assistant that takes a buyer
 *"I want a home"* all the way to a **confirmed site visit on the broker's Google Calendar** —
 over **WhatsApp, Telegram, or the web** — while keeping a human broker in the loop the whole way.
 
-> **Live:** `https://144-24-156-187.sslip.io` — customer chat at `/`, broker dashboard at `/broker`
+> **🌐 Live demo:** https://144-24-156-187.sslip.io &nbsp;·&nbsp; chat `/chat` &nbsp;·&nbsp; browse `/properties/browse` &nbsp;·&nbsp; broker `/broker`
+> **📱 Telegram bot:** [@helper_panda_realesatet2bot](https://t.me/helper_panda_realesatet2bot) — *try it right now*
 > Runs 24/7 on an Oracle Cloud free VM behind auto-HTTPS (Caddy).
+
+---
+
+## 📸 See it in action
+
+### One booking, both sides — in real time
+A customer books a visit in **plain English**; Riya instantly pings the broker on WhatsApp to confirm, and **both sides are notified** — no dashboard needed.
+
+| 🧑 Customer · WhatsApp | 🧑‍💼 Broker · WhatsApp |
+|:---:|:---:|
+| <img src="docs/screenshots/chat-customer-3-book.png" width="330"> | <img src="docs/screenshots/chat-broker-booking.png" width="330"> |
+| Natural search → real cards → picks a slot → *"checking with the consultant…"* | Gets the request → replies *"Yeah Saturday works"* → **auto-confirmed on the calendar** |
+
+### It understands real, roundabout language
+| Discovery from a plain request | Answers from real data |
+|:---:|:---:|
+| <img src="docs/screenshots/chat-customer-1-discover.png" width="330"> | <img src="docs/screenshots/chat-customer-2-distance.png" width="330"> |
+| *"My family and I are moving to Lucknow… a 2 BHK… budget's a bit tight, 35–40 lakh"* | *"How far is it from the nearest metro?"* → exact **4.34 km**, computed from the listing |
+
+### Run the whole CRM by texting Riya
+The broker manages leads, visits and negotiations from **one WhatsApp thread** — search the pipeline, move leads, pull stats, get reminders, and let Riya **ask a customer and auto-reschedule** when they agree.
+
+<img src="docs/screenshots/chat-broker-crm.png" width="340">
+
+> `stats` &nbsp;·&nbsp; `who's negotiating?` &nbsp;·&nbsp; `move Ravi to negotiating` &nbsp;·&nbsp; `ask Saubhagya if she's free Saturday` &nbsp;·&nbsp; `message Ravi: I'll call this evening`
+
+### Instant, actionable notifications
+Every visit reaches the broker on WhatsApp **and** email — with one-tap buttons and an `.ics` calendar invite.
+
+| Visit-request email (actionable) | Calendar invite (.ics) |
+|:---:|:---:|
+| <img src="docs/screenshots/email-visit-request.png" width="330"> | <img src="docs/screenshots/email-calendar-invite.png" width="330"> |
+
+### The web experience
+| Landing | Live chat | Broker dashboard |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/web-landing.jpeg" width="250"> | <img src="docs/screenshots/web-chat.jpeg" width="250"> | <img src="docs/screenshots/web-dashboard.jpeg" width="250"> |
+| **Analytics** | **Pipeline** (drag-drop + WhatsApp control) | **Browse** |
+| <img src="docs/screenshots/web-analytics.jpeg" width="250"> | <img src="docs/screenshots/web-pipeline.jpeg" width="250"> | <img src="docs/screenshots/web-browse.jpeg" width="250"> |
 
 ---
 
@@ -18,8 +58,11 @@ over **WhatsApp, Telegram, or the web** — while keeping a human broker in the 
 - **Two-way broker confirmation** — the AI messages the broker on WhatsApp *and* email → broker replies **YES/NO** → the visit is **auto-booked on Google Calendar** and both parties are notified
 - **Full negotiation loop** — broker busy? → buyer is offered a new time → broker asked again → repeat until both agree
 - **Reschedule from either side** (buyer or broker), any time
-- **One collective view for the broker** — every lead & visit from *all* channels, on both the **web dashboard** and via **WhatsApp commands**
-- **Day-before reminders** to buyer (WhatsApp/email) and broker (email)
+- **A full CRM the broker runs from WhatsApp** — move leads across the pipeline (*"put Ravi on hold"*), search it (*"who's negotiating?"*), pull `stats`, add a listing, and relay a message to any customer — all in plain English
+- **One-shot smart reschedule** — tell Riya *"ask Saubhagya if she's free Saturday"* → she asks the customer on **their** channel and **auto-reschedules** the moment they say yes
+- **Two-way relay** — Riya delivers the broker's message on the customer's own channel (WhatsApp / Telegram / web) and **forwards the customer's reply back** to the broker
+- **One collective view** — every lead & visit from *all* channels, on both the **web dashboard** (drag-drop pipeline, analytics) and via WhatsApp
+- **Automatic visit reminders** — a morning-of *and* a ~1-hour-before nudge, to **both** the buyer (their channel) and the broker
 
 ---
 
@@ -101,9 +144,17 @@ sequenceDiagram
 - Stays on real-estate topics only (guardrail)
 
 ### 🧑‍💼 Broker experience
-- **WhatsApp**: receives every visit request (with property details + that day's schedule); replies in natural language — *"yes that works"*, *"no sorry tied up"*; commands like **`meetings`**, **`help`**; reschedule via text
-- **Web dashboard** (`/broker`): Meetings, Pipeline, Analytics, My Listings, Add Property, Upload CSV, Customer View
-- **Collective view** — leads & visits from WhatsApp + Telegram + web in one table, with status filters and click-to-WhatsApp links
+- **WhatsApp = a full assistant** (LLM-routed, understands natural phrasing):
+  - Confirm/decline a visit — *"yeah Saturday works"*, *"no, tied up then"*
+  - **`meetings`** / **`stats`** — upcoming visits (with property) · live lead/listing/visit counts
+  - **Search the pipeline** — *"who's negotiating?"*, *"show me new leads"*, *"find Ravi"*
+  - **Move leads** — *"move Ravi to negotiating"*, *"put 98765… on hold"*
+  - **Ask & auto-reschedule** — *"ask Saubhagya if she's free Saturday 5pm"*
+  - **Relay a message** — *"message Ravi: I'll call this evening"* (replies come back to you)
+  - **Add a listing** — *"add a 2 BHK flat in Gomti Nagar, 45 lakh, 1100 sqft, lift & parking"*
+- **Branded broker login** (`/broker/login`) — no more pasting a raw token
+- **Web dashboard** (`/broker`): Dashboard, **drag-drop Pipeline** (with a per-lead *"you offered / they want"* negotiation tracker), visual **Analytics**, Meetings, My Listings, Add Property, Upload CSV, Customer View
+- Moving a lead on the dashboard **also pings the broker on WhatsApp** — one source of truth
 - The broker number is always treated as the broker — never routed into the buyer agent
 
 ### 🔗 Cross-channel integration
@@ -112,8 +163,8 @@ sequenceDiagram
 ### 🗓️ Calendar & notifications
 - Real **free/busy check** against the broker's Google Calendar before proposing a slot
 - On confirmation, the AI **creates the event** on the broker's calendar itself
-- `.ics` invites by email; day-before reminders to both sides
-- All times handled in **IST (Asia/Kolkata)**
+- `.ics` invites by email; **morning-of + 1-hour-before reminders** to both sides, fired by an in-app scheduler (no external cron)
+- All times handled in **IST (Asia/Kolkata)** — calendar links carry the timezone so they're correct on any device
 
 ---
 
