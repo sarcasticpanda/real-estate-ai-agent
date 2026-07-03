@@ -42,3 +42,7 @@ scratchpad/
 
 sampleimages/
 /*.jpeg
+
+# keep README screenshots (override *.png / *.jpeg above)
+!docs/screenshots/*.png
+!docs/screenshots/*.jpeg
